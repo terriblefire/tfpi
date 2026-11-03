@@ -54,7 +54,7 @@ class FlasherTests(Sandbox):
         os.environ["FAKE_XC3_FAIL"] = "1"
         self.assertEqual(self.flash(self.release()), 1)
         state = config.load_state()
-        self.assertIn("Verify: Failure", state["cpld"]["fault"])
+        self.assertIn("Mismatch at fuse", state["cpld"]["fault"])
         self.assertEqual(self.cpld_flashes(), 1)                          # exactly one attempt
 
         del os.environ["FAKE_XC3_FAIL"]

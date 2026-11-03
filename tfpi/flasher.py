@@ -32,7 +32,10 @@ from pathlib import Path
 from . import config
 from .fwimage import FirmwareError, load_release
 
-CPLD_FAIL_WORDS = re.compile(r"fail|error|mismatch|no device|unknown device|can'?t|cannot", re.I)
+# xc3sprog's exit code is the verify result (1 on a fuse mismatch); with -v it
+# also prints "Success! Verify time ..." when every fuse matched.
+CPLD_SUCCESS = re.compile(r"Success! Verify")
+CPLD_PROBLEM = re.compile(r"Mismatch at|failed|No JTAG|not found|Unknown", re.I)
 
 
 class FlashError(RuntimeError):
@@ -212,9 +215,10 @@ def flash_cpld(release, state, work):
 
     log(f"CPLD: programming {release.cpld_device or 'CPLD'} (one attempt, no retries)")
     rc, output = run([config.XC3SPROG, "-c", config.XC3SPROG_CABLE, "-p", "0", "-v", jed])
-    failed_line = next((line for line in output.splitlines() if CPLD_FAIL_WORDS.search(line)), None)
-    if rc or failed_line:
-        reason = failed_line.strip() if failed_line else f"xc3sprog status {rc}"
+    if rc or not CPLD_SUCCESS.search(output):
+        problem = next((line.strip() for line in output.splitlines() if CPLD_PROBLEM.search(line)), None)
+        reason = f"xc3sprog exit status {rc}" + (f" ({problem})" if problem else
+                                                  "" if rc else ", no verify success line")
         cpld["last_result"] = "failed"
         cpld["fault"] = f"{config.now()}: {reason}"
         config.save_state(state)

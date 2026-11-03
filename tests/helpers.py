@@ -76,9 +76,13 @@ STUBS = {
     "xc3sprog": r'''
         import os, sys
         open(os.environ["FAKE_XC3_LOG"], "a").write(" ".join(sys.argv[1:]) + "\n")
+        # Real banner: contains the word "failure" on every run.
+        print("XC3SPROG (c) 2004-2011 xc3sprog project $Rev: 774 $ OS: Linux")
+        print("Feedback on success/failure/enhancement requests:")
+        print("JTAG chainpos: 0 Device IDCODE = 0x59616093\tDesc: XC95288XL")
         if os.environ.get("FAKE_XC3_FAIL"):
-            print("Verify: Failure at fuse 22/6"); sys.exit(1)
-        print("JTAG chainpos: 0 Device IDCODE = 0x29618093 Desc: XC95288XL"); print("Verify: Success")
+            print("Mismatch at fuse  12345: 0 vs 1"); sys.exit(1)
+        print("Success! Verify time 1799.3 ms")
     ''',
     "pinctrl": r'''
         import os
