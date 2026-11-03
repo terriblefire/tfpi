@@ -94,7 +94,11 @@ make -C "$SRC/fomu-flash" -j"$(nproc)"
 install -m755 "$SRC/fomu-flash/fomu-flash" /usr/local/bin/fomu-flash
 
 # --- xc3sprog (gpiod_creator cable) ----------------------------------------
-fetch xc3sprog "$XC3SPROG_REPO" "$XC3SPROG_REF"
+gpiod_major=$(pkg-config --modversion libgpiod | cut -d. -f1)
+if [ "$gpiod_major" -ge 2 ]; then xc3_ref=$XC3SPROG_REF; else xc3_ref=$XC3SPROG_REF_GPIOD1; fi
+echo "libgpiod $(pkg-config --modversion libgpiod): xc3sprog ${xc3_ref:0:7}"
+rm -rf "$SRC/xc3sprog/build"
+fetch xc3sprog "$XC3SPROG_REPO" "$xc3_ref"
 cmake -S "$SRC/xc3sprog" -B "$SRC/xc3sprog/build" -DUSE_FTD2XX=OFF -DCMAKE_BUILD_TYPE=Release
 cmake --build "$SRC/xc3sprog/build" -j"$(nproc)"
 cmake --install "$SRC/xc3sprog/build"
