@@ -4,11 +4,12 @@
 <tr><th>Board</th><td>{{ release.board }}</td></tr>
 <tr><th>Seed</th><td>{{ release.seed or "-" }}</td></tr>
 <tr><th>Files</th><td class="mono">{{ release.members | join(", ") }}</td></tr>
-<tr><th>RAM FPGA</th><td><span class="mono">{{ release.fpga_sha[:16] }}</span> · {{ release.fpga_bytes }} bytes · {{ release.fpga_source }}<br>
+<tr><th>RAM FPGA</th><td><span class="mono">{{ release.fpga_file }}</span><br><span class="mono">{{ release.fpga_sha[:16] }}</span> · {{ release.fpga_bytes }} bytes · {{ release.fpga_source }}<br>
   {% if plan.fpga %}<b>will be flashed</b>{% else %}<span class="muted">skipped</span>{% endif %} <span class="muted">({{ plan.fpga_reason }})</span></td></tr>
-<tr><th>BUS CPLD</th><td>{% if release.cpld_sha %}<span class="mono">{{ release.cpld_sha[:16] }}</span> · {{ release.cpld_device or "unknown device" }}<br>{% endif %}
+<tr><th>BUS CPLD</th><td>{% if release.cpld_sha %}<span class="mono">{{ release.cpld_file }}</span><br><span class="mono">{{ release.cpld_sha[:16] }}</span> · {{ release.cpld_device or "unknown device" }}<br>{% endif %}
   {% if plan.cpld %}<b>will be flashed</b>{% else %}<span class="muted">skipped</span>{% endif %} <span class="muted">({{ plan.cpld_reason }})</span></td></tr>
 </table>
+{% if not release.cpld_sha %}<p class="warn">This zip has no CPLD (.jed) file, so only the FPGA can be flashed.</p>{% endif %}
 {% if plan.blocked %}<p class="bad">{{ plan.blocked }}</p>{% endif %}
 </div>
 

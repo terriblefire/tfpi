@@ -1,16 +1,19 @@
 """Read and check a TF firmware release zip.
 
 A release zip holds:
-  <board>_ram.bin       RAM FPGA image: either the full SPI flash image
-                        (bitstream + SSBL/ROMFS at 0x21000) or a raw bitstream
-  <board>_bus_top.jed   BUS CPLD (falls back to <board>_bus.jed)
-  seed.txt              optional, nextpnr seed of the build
+  <board>_ram_flash.bin RAM FPGA image (or <board>_ram.bin): either the full
+                        SPI flash image (bitstream + SSBL/ROMFS at 0x21000) or
+                        a raw bitstream
+  *.jed                 BUS CPLD. One .jed is used whatever its name; with
+                        several, _bus_prod, then _bus_top, then _bus wins
+  seed.txt              optional, nextpnr seed (else "seed N" in README.md)
   spirom.img            optional, SSBL/ROMFS for raw-bitstream releases
 
 Combine/validate logic is copied from tf4060/boards/tf4060r5/build_flash_image.py.
 """
 
 import hashlib
+import re
 import struct
 import zipfile
 from dataclasses import dataclass, field
@@ -95,6 +98,8 @@ class Release:
     seed: str = ""
     fpga_image: bytes = b""
     fpga_source: str = ""        # "full image" or "raw bitstream + spirom.img"
+    fpga_file: str = ""
+    cpld_file: str = None
     cpld_jed: bytes = None
     cpld_device: str = None
     members: list = field(default_factory=list)
@@ -115,6 +120,8 @@ class Release:
             "fpga_sha": self.fpga_sha,
             "fpga_bytes": len(self.fpga_image),
             "fpga_source": self.fpga_source,
+            "fpga_file": self.fpga_file,
+            "cpld_file": self.cpld_file,
             "cpld_sha": self.cpld_sha,
             "cpld_device": self.cpld_device,
             "members": self.members,
@@ -151,20 +158,35 @@ def _pick(files, suffixes, what):
     return None
 
 
+def _pick_jed(files):
+    jeds = sorted(name for name in files if name.lower().endswith(".jed"))
+    if len(jeds) <= 1:
+        return jeds[0] if jeds else None
+    for suffix in ("_bus_prod.jed", "_bus_top.jed", "_bus.jed"):
+        hits = [name for name in jeds if name.endswith(suffix)]
+        if len(hits) == 1:
+            return hits[0]
+    raise FirmwareError(f"cannot tell which CPLD file to use: {', '.join(jeds)}")
+
+
 def load_release(path, name=None, board=None, spirom=None):
     """Parse a release zip. `board` (e.g. tf4060r5) is enforced when given.
     `spirom` is the fallback SSBL/ROMFS bytes for raw-bitstream releases."""
     files = _read_members(path)
-    ram_name = _pick(files, ("_ram.bin", "_ram_flash.bin"), "RAM FPGA image")
+    ram_name = _pick(files, ("_ram_flash.bin", "_ram.bin"), "RAM FPGA image")
     if ram_name is None:
-        raise FirmwareError("zip has no *_ram.bin FPGA image")
+        raise FirmwareError("zip has no *_ram_flash.bin or *_ram.bin FPGA image")
     zip_board = ram_name.rsplit("_ram", 1)[0]
     if board and zip_board != board:
         raise FirmwareError(f"zip is for board {zip_board!r}, this Pi is set up for {board!r}")
 
     release = Release(name=name or PurePosixPath(str(path)).name, board=zip_board,
                       members=sorted(files))
+    release.fpga_file = ram_name
     release.seed = files.get("seed.txt", b"").decode("ascii", "replace").strip()
+    if not release.seed and "README.md" in files:
+        found = re.search(r"seed\s+(\d+)", files["README.md"].decode("utf-8", "replace"), re.I)
+        release.seed = found.group(1) if found else ""
 
     ram = files[ram_name]
     if not ram.startswith(PREAMBLE):
@@ -185,8 +207,9 @@ def load_release(path, name=None, board=None, spirom=None):
         release.fpga_source = "raw bitstream + spirom.img" + (
             " (from zip)" if "spirom.img" in files else " (from /etc/tfpi)")
 
-    jed_name = _pick(files, ("_bus_top.jed", "_bus.jed"), "CPLD")
+    jed_name = _pick_jed(files)
     if jed_name is not None:
+        release.cpld_file = jed_name
         release.cpld_jed = files[jed_name]
         release.cpld_device = check_jed(release.cpld_jed)
     return release

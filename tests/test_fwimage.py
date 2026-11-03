@@ -31,6 +31,34 @@ class ReleaseTests(Sandbox):
         z = make_zip(self.tmp / "r.zip", {"tf4060r5_ram.bin": bitstream(), "spirom.img": spi_image()})
         self.assertIn("from zip", load_release(z).fpga_source)
 
+    def test_prod_jed_in_subfolder_with_reports(self):
+        # Layout of tf4060r5_2026-11-03_22e0593.zip
+        z = make_zip(self.tmp / "r.zip", {
+            "2026-11-03_22e0593/tf4060r5_ram_flash.bin": full_image(),
+            "2026-11-03_22e0593/tf4060r5_bus_prod.jed": jed(),
+            "2026-11-03_22e0593/README.md": "- nextpnr seed 180, the best of 256\n",
+            "2026-11-03_22e0593/reports/tf4060r5_bus_prod.rpt": "report",
+        })
+        release = load_release(z, board="tf4060r5")
+        self.assertEqual(release.fpga_file, "tf4060r5_ram_flash.bin")
+        self.assertEqual(release.cpld_file, "tf4060r5_bus_prod.jed")
+        self.assertEqual(release.cpld_jed, jed())
+        self.assertEqual(release.seed, "180")
+
+    def test_jed_choice(self):
+        def pick(*names):
+            files = {"tf4060r5_ram.bin": full_image(), **{n: jed() for n in names}}
+            return load_release(make_zip(self.tmp / "j.zip", files)).cpld_file
+        self.assertEqual(pick("anything.jed"), "anything.jed")
+        self.assertEqual(pick("tf4060r5_bus.jed", "tf4060r5_bus_top.jed"), "tf4060r5_bus_top.jed")
+        self.assertEqual(pick("tf4060r5_bus_top.jed", "tf4060r5_bus_prod.jed"), "tf4060r5_bus_prod.jed")
+        with self.assertRaisesRegex(FirmwareError, "which CPLD"):
+            pick("a.jed", "b.jed")
+
+    def test_ram_flash_preferred_over_raw(self):
+        z = make_zip(self.tmp / "r.zip", {"tf4060r5_ram.bin": bitstream(), "tf4060r5_ram_flash.bin": full_image()})
+        self.assertEqual(load_release(z).fpga_file, "tf4060r5_ram_flash.bin")
+
     def test_rejections(self):
         cases = {
             "is for board": {"tf4060r4_ram.bin": full_image()},
@@ -56,6 +84,16 @@ class RealReleaseTests(unittest.TestCase):
         self.assertEqual(release.fpga_source, "full image")
         self.assertEqual(len(release.fpga_image), 1022464)
         self.assertEqual(release.cpld_device, "XC95288XL-10-TQ144")
+
+    def test_2026_11_prod_release(self):
+        path = RELEASES.parents[2] / "tf4060r5_2026-11-03_22e0593.zip"
+        if not path.exists():
+            self.skipTest("zip not present")
+        release = load_release(path, board="tf4060r5")
+        self.assertEqual(release.cpld_file, "tf4060r5_bus_prod.jed")
+        self.assertTrue(hashlib.sha1(release.cpld_jed).hexdigest().startswith("7abe89e2"))
+        self.assertTrue(hashlib.sha1(release.fpga_image).hexdigest().startswith("0202d7b5"))
+        self.assertEqual(release.seed, "180")
 
     def test_2024_raw_bitstream_with_spirom(self):
         spirom = (RELEASES.parents[1] / "spirom" / "spirom.img").read_bytes()
