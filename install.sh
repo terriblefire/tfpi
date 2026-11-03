@@ -151,5 +151,7 @@ if [ "$first_install" = 1 ] && [ -z "${TFPI_NO_REBOOT:-}" ]; then
 	echo "Rebooting to load the a314 SPI overlay..."
 	systemctl reboot
 else
+	# install-pi.sh leaves a314d stopped and expects a reboot.
+	systemctl start a314d || echo "a314d did not start; reboot to load the SPI overlay"
 	echo "Reboot if config.txt changed (a314 SPI overlay): sudo reboot"
 fi
