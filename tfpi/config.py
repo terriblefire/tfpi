@@ -63,10 +63,19 @@ def spirom():
 
 def write_json(path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
+    # The Pi often loses power with the Amiga: get the data onto the card before
+    # the rename, then make the rename itself durable.
     with tempfile.NamedTemporaryFile("w", dir=path.parent, delete=False) as handle:
         json.dump(data, handle, indent=2, sort_keys=True)
+        handle.flush()
+        os.fsync(handle.fileno())
         temporary = Path(handle.name)
     temporary.replace(path)
+    directory = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
 
 
 def read_json(path, default):

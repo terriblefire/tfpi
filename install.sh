@@ -136,9 +136,11 @@ systemctl enable tfpi-web.service
 systemctl restart tfpi-web.service
 
 # --- Done -------------------------------------------------------------------
+sync    # the Pi may lose power with the Amiga at any time
 first_install=0
 [ -f /var/lib/tfpi/installed ] || first_install=1
 date -Is > /var/lib/tfpi/installed
+sync
 systemctl disable tfpi-firstboot.service 2>/dev/null || true
 
 host=$(hostname)

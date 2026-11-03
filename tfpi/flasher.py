@@ -20,6 +20,7 @@ CLI:
 import argparse
 import fcntl
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -231,6 +232,8 @@ def store_release(zip_path, name, state):
     target = config.FIRMWARE_DIR / name
     if Path(zip_path).resolve() != target.resolve():
         shutil.copyfile(zip_path, target)
+        with open(target, "rb") as handle:
+            os.fsync(handle.fileno())
     target.touch()
     keep = {state.get("release")}
     stored = sorted(config.FIRMWARE_DIR.glob("*.zip"), key=lambda p: p.stat().st_mtime, reverse=True)

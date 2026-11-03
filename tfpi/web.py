@@ -207,6 +207,8 @@ def create_app():
             source.save(target)
         else:
             shutil.copyfile(source, target)
+        with open(target, "rb") as handle:
+            os.fsync(handle.fileno())
         return token
 
     @app.post("/upload")
