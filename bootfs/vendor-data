@@ -1,0 +1,34 @@
+#!/bin/sh
+# TF Pi first boot.
+#
+# Copy this file, unchanged, to the boot partition ("bootfs") of a card you
+# have just written with Raspberry Pi Imager, next to user-data. On first
+# boot cloud-init runs it; it installs a service that downloads and runs
+# https://terriblefire.github.io/tfpi/install.sh once the network is up.
+# Progress: /var/log/tfpi-install.log on the Pi. The Pi reboots when done.
+set -e
+URL=https://terriblefire.github.io/tfpi/install.sh
+
+cat > /etc/systemd/system/tfpi-firstboot.service <<UNIT
+[Unit]
+Description=TF Pi first-boot installer
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=!/var/lib/tfpi/installed
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+Environment=TFPI_FIRSTBOOT=1
+ExecStart=/bin/sh -c 'until curl -fsSL -o /run/tfpi-install.sh $URL; do sleep 15; done; exec bash /run/tfpi-install.sh'
+Restart=on-failure
+RestartSec=60
+TimeoutStartSec=infinity
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+systemctl daemon-reload 2>/dev/null || true
+systemctl enable tfpi-firstboot.service
+systemctl start --no-block tfpi-firstboot.service 2>/dev/null || true

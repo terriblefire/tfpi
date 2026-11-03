@@ -1,0 +1,23 @@
+{% extends "base.html" %}{% block body %}
+<div class="card"><h1>Review {{ release.name }}</h1>
+<table>
+<tr><th>Board</th><td>{{ release.board }}</td></tr>
+<tr><th>Seed</th><td>{{ release.seed or "-" }}</td></tr>
+<tr><th>Files</th><td class="mono">{{ release.members | join(", ") }}</td></tr>
+<tr><th>RAM FPGA</th><td><span class="mono">{{ release.fpga_sha[:16] }}</span> · {{ release.fpga_bytes }} bytes · {{ release.fpga_source }}<br>
+  {% if plan.fpga %}<b>will be flashed</b>{% else %}<span class="muted">skipped</span>{% endif %} <span class="muted">({{ plan.fpga_reason }})</span></td></tr>
+<tr><th>BUS CPLD</th><td>{% if release.cpld_sha %}<span class="mono">{{ release.cpld_sha[:16] }}</span> · {{ release.cpld_device or "unknown device" }}<br>{% endif %}
+  {% if plan.cpld %}<b>will be flashed</b>{% else %}<span class="muted">skipped</span>{% endif %} <span class="muted">({{ plan.cpld_reason }})</span></td></tr>
+</table>
+{% if plan.blocked %}<p class="bad">{{ plan.blocked }}</p>{% endif %}
+</div>
+
+<div class="card">
+<form method="post" action="/flash/{{ token }}"><input type="hidden" name="csrf" value="{{ csrf }}">
+<p class="muted">The Amiga must be powered. a314d is stopped while flashing and restarted afterwards. Don't power off during the flash.</p>
+{% if not plan.fpga %}<p><label><input type="checkbox" name="force_fpga" value="1"> Flash the FPGA anyway</label></p>{% endif %}
+{% if release.cpld_sha and not plan.cpld and not plan.blocked %}<p><label><input type="checkbox" name="force_cpld" value="1"> Flash the CPLD anyway <span class="warn">(uses an erase cycle; only if you know it differs)</span></label></p>{% endif %}
+<button {% if busy %}disabled{% endif %}>{% if busy %}A flash is running{% else %}Flash now{% endif %}</button>
+<a href="/" style="margin-left:12px">Cancel</a>
+</form></div>
+{% endblock %}

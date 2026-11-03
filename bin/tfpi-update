@@ -1,0 +1,4 @@
+#!/bin/sh
+# Update this Pi to the commits pinned in the tfpi repo's sources.conf.
+[ "$(id -u)" = 0 ] || exec sudo "$0" "$@"
+TFPI_NO_REBOOT=1 exec bash /opt/tfpi/src/tfpi/install.sh "$@"

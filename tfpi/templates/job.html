@@ -1,0 +1,27 @@
+{% extends "base.html" %}{% block body %}
+<div class="card"><h1>Flashing <span class="muted mono">{{ job }}</span></h1>
+<p id="status" class="muted">Running… don't power off the Amiga or the Pi.</p>
+<pre class="log" id="log"></pre>
+<p><a href="/">Back to status</a></p></div>
+<script>
+let offset = 0;
+const logEl = document.getElementById("log"), statusEl = document.getElementById("status");
+async function poll() {
+  try {
+    const r = await fetch(`/job/{{ job }}/log?offset=${offset}`, {cache: "no-store"});
+    if (!r.ok) throw new Error(r.status);
+    const d = await r.json();
+    if (d.text) { logEl.textContent += d.text; logEl.scrollTop = logEl.scrollHeight; }
+    offset = d.offset;
+    if (d.status === "done") {
+      statusEl.className = d.result.ok ? "ok" : "bad";
+      statusEl.textContent = (d.result.ok ? "Finished: " : "Failed: ") + d.result.result;
+      return;
+    }
+    if (d.status === "stopped") { statusEl.className = "bad"; statusEl.textContent = "The flash process stopped without a result. Check the log."; return; }
+  } catch (e) { statusEl.textContent = "Lost contact with the Pi, retrying…"; }
+  setTimeout(poll, 1000);
+}
+poll();
+</script>
+{% endblock %}

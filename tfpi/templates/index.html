@@ -1,0 +1,43 @@
+{% extends "base.html" %}{% block body %}
+{% if job and job_state == "running" %}<div class="flash">A flash is running. <a href="/job/{{ job }}">Watch it</a>.</div>{% endif %}
+<div class="card"><h1>Installed firmware</h1>
+<table>
+<tr><th>Release</th><td>{% if state.release %}<span class="mono">{{ state.release }}</span>{% else %}<span class="muted">unknown (nothing flashed through this page yet)</span>{% endif %}</td></tr>
+<tr><th>Seed</th><td>{{ state.seed or "-" }}</td></tr>
+<tr><th>RAM FPGA</th><td>{% if state.fpga.sha %}<span class="mono">{{ state.fpga.sha[:16] }}</span>{% else %}<span class="muted">unknown</span>{% endif %}
+  <span class="muted">· {{ state.fpga.flashes }} flashes{% if state.fpga.time %} · last {{ state.fpga.time }}{% endif %}</span>
+  {% if state.fpga.last_result and state.fpga.last_result != "ok" %}<br><span class="bad">last result: {{ state.fpga.last_result }}</span>{% endif %}</td></tr>
+<tr><th>BUS CPLD</th><td>{% if state.cpld.sha %}<span class="mono">{{ state.cpld.sha[:16] }}</span> {{ state.cpld.device or "" }}{% else %}<span class="muted">unknown</span>{% endif %}
+  <span class="muted">· {{ state.cpld.flashes }} flashes{% if state.cpld.time %} · last {{ state.cpld.time }}{% endif %}</span>
+  {% if state.cpld.fault %}<br><span class="bad">LOCKED: {{ state.cpld.fault }}</span>{% endif %}</td></tr>
+<tr><th>a314d</th><td class="{{ 'ok' if a314d == 'active' else 'warn' }}">{{ a314d }}</td></tr>
+</table></div>
+
+<div class="card"><h2>Deploy new firmware</h2>
+<form method="post" action="/upload" enctype="multipart/form-data"><input type="hidden" name="csrf" value="{{ csrf }}">
+<p><input type="file" name="firmware" accept=".zip" required></p>
+<button>Upload and review</button> <span class="muted">Nothing is flashed until you confirm on the next page.</span>
+</form>
+{% if not spirom %}<p class="muted">Releases that carry only a raw FPGA bitstream also need <code>spirom.img</code> inside the zip.</p>{% endif %}
+</div>
+
+{% if stored %}<div class="card"><h2>Stored releases (rollback)</h2><table>
+{% for name in stored %}<tr><td class="mono">{{ name }}{% if name == state.release %} <span class="ok">(installed)</span>{% endif %}</td>
+<td style="width:1%"><form class="inline" method="post" action="/stored/{{ name }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary">Review</button></form></td></tr>{% endfor %}
+</table></div>{% endif %}
+
+{% if state.history %}<div class="card"><h2>History</h2><table>
+<tr><th>Time</th><th>Release</th><th>Result</th></tr>
+{% for h in state.history[:15] %}<tr><td>{{ h.time }}</td><td class="mono">{{ h.release }}<br><span class="muted">FPGA {{ h.fpga }} · CPLD {{ h.cpld }}</span></td>
+<td class="{{ 'ok' if h.result == 'ok' else 'muted' if h.result == 'nothing to do' else 'bad' }}">{{ h.result }}</td></tr>{% endfor %}
+</table></div>{% endif %}
+
+<div class="card"><h2>Software on this Pi</h2><table>
+{% for name, v in versions.items() %}<tr><th>{{ name }}</th><td class="mono">{{ v.ref[:12] if v.ref else "" }} <span class="muted">{{ v.repo }}</span></td></tr>
+{% else %}<tr><td class="muted">no version info (installer not run?)</td></tr>{% endfor %}
+</table></div>
+
+<div class="card"><h2>Change password</h2>
+<form method="post" action="/password"><input type="hidden" name="csrf" value="{{ csrf }}">
+<input type="password" name="current" placeholder="Current" required> <input type="password" name="new" placeholder="New" required> <button class="secondary">Change</button></form></div>
+{% endblock %}

@@ -1,0 +1,307 @@
+"""Flash a TF firmware release zip onto the board attached to this Pi.
+
+Ported from tf4060/boards/tf4060r5/flash_ram.sh and flash_bus.sh:
+  * a314d shares the SPI pins with the programmer, so it is stopped for the
+    flash and always restarted afterwards;
+  * FPGA: fomu-flash -u -w, read the flash back and compare, fomu-flash -r,
+    setgpio.sh, wait for CDONE (GPIO 23);
+  * CPLD: xc3sprog -c gpiod_creator -p 0 -v, ONE attempt only. A CPLD that
+    fails erase/verify is failing; more cycles destroy it. After a failure the
+    CPLD is locked out until someone runs `tfpi-flash clear-cpld-fault`.
+  * Chips whose image is already installed are skipped (saves erase cycles).
+
+CLI:
+  tfpi-flash status
+  tfpi-flash inspect FILE.zip
+  tfpi-flash flash FILE.zip [--force-fpga] [--force-cpld] [--name N] [--result R]
+  tfpi-flash clear-cpld-fault
+"""
+
+import argparse
+import fcntl
+import json
+import re
+import shutil
+import subprocess
+import sys
+import time
+from contextlib import contextmanager
+from pathlib import Path
+
+from . import config
+from .fwimage import FirmwareError, load_release
+
+CPLD_FAIL_WORDS = re.compile(r"fail|error|mismatch|no device|unknown device|can'?t|cannot", re.I)
+
+
+class FlashError(RuntimeError):
+    pass
+
+
+def log(message):
+    print(f"[{time.strftime('%H:%M:%S')}] {message}", flush=True)
+
+
+def run(cmd, check=False):
+    """Run a command, echo its output into our log, return (rc, output)."""
+    log("$ " + " ".join(str(part) for part in cmd))
+    try:
+        process = subprocess.Popen([str(part) for part in cmd], stdout=subprocess.PIPE,
+                                   stderr=subprocess.STDOUT, text=True, errors="replace")
+    except OSError as error:
+        raise FlashError(f"cannot run {cmd[0]}: {error}") from error
+    lines = []
+    with process:
+        for line in process.stdout:
+            lines.append(line)
+            print("    " + line.rstrip(), flush=True)
+    rc = process.returncode
+    if check and rc:
+        raise FlashError(f"{cmd[0]} exited with status {rc}")
+    return rc, "".join(lines)
+
+
+@contextmanager
+def flash_lock():
+    config.STATE_DIR.mkdir(parents=True, exist_ok=True)
+    with open(config.LOCK_FILE, "w") as handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise FlashError("another flash is already running") from error
+        yield
+
+
+@contextmanager
+def a314d_stopped():
+    """Stop a314d for the duration, restart it if it was running."""
+    rc = subprocess.run([config.SYSTEMCTL, "is-active", "--quiet", config.A314_SERVICE]).returncode
+    was_active = rc == 0
+    if was_active:
+        log("stopping a314d (it shares the SPI pins with the programmer)")
+        run([config.SYSTEMCTL, "stop", config.A314_SERVICE])
+    try:
+        yield
+    finally:
+        if was_active:
+            log("restarting a314d")
+            if run([config.SYSTEMCTL, "start", config.A314_SERVICE])[0]:
+                log("WARNING: could not restart a314d")
+
+
+def plan(release, state, force_fpga=False, force_cpld=False):
+    """Decide which chips to flash. Returns a dict the web page shows as-is."""
+    fpga_same = release.fpga_sha == state["fpga"]["sha"]
+    result = {
+        "fpga": force_fpga or not fpga_same,
+        "fpga_reason": ("forced" if force_fpga and fpga_same else
+                        "already installed" if fpga_same else "new image"),
+        "cpld": False,
+        "cpld_reason": "",
+        "blocked": None,
+    }
+    if release.cpld_jed is None:
+        result["cpld_reason"] = "no CPLD file in this zip"
+    elif state["cpld"].get("fault"):
+        result["cpld_reason"] = "CPLD locked after a failed flash"
+        result["blocked"] = ("The last CPLD flash failed (" + state["cpld"]["fault"] + "). "
+                             "Check or replace the CPLD, then run "
+                             "'sudo tfpi-flash clear-cpld-fault'.")
+    elif release.cpld_sha == state["cpld"]["sha"] and not force_cpld:
+        result["cpld_reason"] = "already installed"
+    else:
+        result["cpld"] = True
+        result["cpld_reason"] = "forced" if release.cpld_sha == state["cpld"]["sha"] else "new image"
+    return result
+
+
+def wait_for_cdone(seconds=5.0):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        out = subprocess.run([config.PINCTRL, "get", str(config.CDONE_GPIO)],
+                             capture_output=True, text=True).stdout
+        if re.search(r"\|\s*hi(\s|$)", out):
+            return True
+        time.sleep(0.1)
+    return False
+
+
+def flash_fpga(release, state, work):
+    image = work / "fpga.bin"
+    readback = work / "readback.bin"
+    image.write_bytes(release.fpga_image)
+    fpga = state["fpga"]
+    fpga["flashes"] += 1
+    fpga["time"] = config.now()
+    fpga["sha"] = None          # unknown until verified
+    config.save_state(state)
+
+    log(f"FPGA: writing {len(release.fpga_image)} bytes ({release.fpga_source})")
+    rc, _ = run([config.FOMU_FLASH, "-q", "-u", "-w", image])
+    if rc:
+        fpga["last_result"] = "write-failed"
+        raise FlashError(f"fomu-flash write failed (status {rc})")
+
+    log("FPGA: reading the SPI flash back to verify")
+    readback.unlink(missing_ok=True)
+    rc, _ = run([config.FOMU_FLASH, "-s", readback])
+    data = readback.read_bytes() if readback.exists() else b""
+    if rc or len(data) < len(release.fpga_image):
+        fpga["last_result"] = "readback-failed"
+        raise FlashError("could not read the SPI flash back")
+    mismatches = sum(1 for a, b in zip(data, release.fpga_image) if a != b)
+    if mismatches:
+        fpga["last_result"] = "verify-failed"
+        raise FlashError(f"SPI flash verify failed: {mismatches} bytes differ")
+    fpga["sha"] = release.fpga_sha
+    fpga["last_result"] = "ok"
+    config.save_state(state)
+    log("FPGA: verify OK")
+
+    # Boot the written flash, then hand the pins back (setgpio.sh), as flash_ram.sh does.
+    run([config.FOMU_FLASH, "-r"])
+    run(["bash", config.SETGPIO])
+    if not wait_for_cdone():
+        fpga["last_result"] = "cdone-low"
+        raise FlashError("flash verified, but the FPGA did not configure (CDONE low). "
+                         "Check the board is powered.")
+    log("FPGA: CDONE high, FPGA configured from SPI flash")
+
+
+def flash_cpld(release, state, work):
+    jed = work / "cpld.jed"
+    jed.write_bytes(release.cpld_jed)
+    cpld = state["cpld"]
+    cpld["flashes"] += 1
+    cpld["time"] = config.now()
+    cpld["sha"] = None
+    config.save_state(state)
+
+    log(f"CPLD: programming {release.cpld_device or 'CPLD'} (one attempt, no retries)")
+    rc, output = run([config.XC3SPROG, "-c", config.XC3SPROG_CABLE, "-p", "0", "-v", jed])
+    failed_line = next((line for line in output.splitlines() if CPLD_FAIL_WORDS.search(line)), None)
+    if rc or failed_line:
+        reason = failed_line.strip() if failed_line else f"xc3sprog status {rc}"
+        cpld["last_result"] = "failed"
+        cpld["fault"] = f"{config.now()}: {reason}"
+        config.save_state(state)
+        raise FlashError(f"CPLD programming failed: {reason}. DO NOT retry: a CPLD that "
+                         "fails erase/verify is failing and more cycles can destroy it.")
+    cpld["sha"] = release.cpld_sha
+    cpld["device"] = release.cpld_device
+    cpld["last_result"] = "ok"
+    config.save_state(state)
+    log("CPLD: programmed and verified")
+
+
+def store_release(zip_path, name, state):
+    config.FIRMWARE_DIR.mkdir(parents=True, exist_ok=True)
+    target = config.FIRMWARE_DIR / name
+    if Path(zip_path).resolve() != target.resolve():
+        shutil.copyfile(zip_path, target)
+    target.touch()
+    keep = {state.get("release")}
+    stored = sorted(config.FIRMWARE_DIR.glob("*.zip"), key=lambda p: p.stat().st_mtime, reverse=True)
+    for old in stored[config.KEEP_RELEASES:]:
+        if old.name not in keep:
+            old.unlink()
+
+
+def flash(zip_path, name=None, force_fpga=False, force_cpld=False):
+    name = name or Path(zip_path).name
+    release = load_release(zip_path, name=name, board=config.board(), spirom=config.spirom())
+    log(f"release {name}: board {release.board}, seed {release.seed or '-'}")
+    with flash_lock():
+        state = config.load_state()
+        todo = plan(release, state, force_fpga, force_cpld)
+        log(f"FPGA: {'flash' if todo['fpga'] else 'skip'} ({todo['fpga_reason']})")
+        log(f"CPLD: {'flash' if todo['cpld'] else 'skip'} ({todo['cpld_reason']})")
+        if todo["blocked"]:
+            log("NOTE: " + todo["blocked"])
+        entry = {"time": config.now(), "release": name, "seed": release.seed,
+                 "fpga": "flash" if todo["fpga"] else "skip",
+                 "cpld": "flash" if todo["cpld"] else "skip", "result": None}
+        if not todo["fpga"] and not todo["cpld"]:
+            entry["result"] = "nothing to do"
+            log("nothing to flash: this release is already installed")
+        else:
+            work = config.STATE_DIR / "work"
+            work.mkdir(parents=True, exist_ok=True)
+            try:
+                with a314d_stopped():
+                    if todo["fpga"]:
+                        flash_fpga(release, state, work)
+                    if todo["cpld"]:
+                        flash_cpld(release, state, work)
+            except Exception as error:
+                entry["result"] = f"FAILED: {error}"
+                raise
+            finally:
+                shutil.rmtree(work, ignore_errors=True)
+                if entry["result"] is None:
+                    entry["result"] = "ok"
+                state["history"] = ([entry] + state["history"])[:50]
+                if entry["result"] == "ok":
+                    state["release"] = name
+                    state["seed"] = release.seed
+                config.save_state(state)
+        if entry["result"] == "nothing to do":
+            state["history"] = ([entry] + state["history"])[:50]
+            config.save_state(state)
+        store_release(zip_path, name, state)
+    log("done: " + entry["result"])
+    return entry
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog="tfpi-flash", description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("status")
+    inspect = sub.add_parser("inspect")
+    inspect.add_argument("zip", type=Path)
+    run_flash = sub.add_parser("flash")
+    run_flash.add_argument("zip", type=Path)
+    run_flash.add_argument("--name")
+    run_flash.add_argument("--force-fpga", action="store_true")
+    run_flash.add_argument("--force-cpld", action="store_true")
+    run_flash.add_argument("--result", type=Path, help="write the outcome here as JSON")
+    sub.add_parser("clear-cpld-fault")
+    args = parser.parse_args(argv)
+
+    if args.cmd == "status":
+        print(json.dumps(config.load_state(), indent=2))
+        return 0
+    if args.cmd == "clear-cpld-fault":
+        state = config.load_state()
+        state["cpld"]["fault"] = None
+        config.save_state(state)
+        print("CPLD fault cleared. The next flash will program the CPLD once.")
+        return 0
+    if args.cmd == "inspect":
+        try:
+            release = load_release(args.zip, board=config.board(), spirom=config.spirom())
+        except FirmwareError as error:
+            print(f"rejected: {error}", file=sys.stderr)
+            return 1
+        print(json.dumps({"release": release.summary(),
+                          "plan": plan(release, config.load_state())}, indent=2))
+        return 0
+
+    outcome = {"ok": False, "result": None}
+    try:
+        entry = flash(args.zip, args.name, args.force_fpga, args.force_cpld)
+        outcome = {"ok": True, "result": entry["result"]}
+    except (FirmwareError, FlashError) as error:
+        log(f"FAILED: {error}")
+        outcome = {"ok": False, "result": str(error)}
+    except Exception as error:  # keep a result file even on a bug
+        log(f"FAILED (internal error): {error!r}")
+        outcome = {"ok": False, "result": f"internal error: {error!r}"}
+    if args.result:
+        config.write_json(args.result, outcome)
+    return 0 if outcome["ok"] else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

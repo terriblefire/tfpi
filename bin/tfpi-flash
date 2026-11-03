@@ -1,0 +1,3 @@
+#!/bin/sh
+# Flash a firmware zip from the command line: sudo tfpi-flash flash FILE.zip
+PYTHONPATH=/opt/tfpi/lib exec python3 -m tfpi.flasher "$@"

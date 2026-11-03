@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}TF Pi{% endblock %}</title>
+<style>
+:root { --bg:#f6f6f4; --card:#fff; --fg:#1d1d1b; --muted:#6b6b66; --line:#ddd; --accent:#1f6feb; --ok:#1a7f37; --bad:#c62828; --warn:#9a6700; }
+@media (prefers-color-scheme: dark) { :root { --bg:#151514; --card:#1f1f1d; --fg:#ececea; --muted:#9b9b95; --line:#34342f; --accent:#4c8dff; --ok:#3fb950; --bad:#ff6b6b; --warn:#d29922; } }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif; }
+header { display:flex; justify-content:space-between; align-items:center; padding:12px 16px; border-bottom:1px solid var(--line); }
+header a { color:var(--fg); text-decoration:none; font-weight:600; }
+main { max-width:860px; margin:0 auto; padding:16px; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:16px; margin-bottom:16px; }
+h1 { font-size:20px; margin:0 0 12px; } h2 { font-size:16px; margin:0 0 10px; }
+table { width:100%; border-collapse:collapse; } td,th { text-align:left; padding:4px 8px 4px 0; vertical-align:top; border-bottom:1px solid var(--line); }
+th { color:var(--muted); font-weight:500; width:30%; }
+code,.mono { font-family:ui-monospace,Menlo,monospace; font-size:13px; word-break:break-all; }
+.muted { color:var(--muted); } .ok { color:var(--ok); } .bad { color:var(--bad); } .warn { color:var(--warn); }
+button,.button { background:var(--accent); color:#fff; border:0; border-radius:6px; padding:8px 14px; font:inherit; cursor:pointer; }
+button.secondary { background:transparent; color:var(--fg); border:1px solid var(--line); }
+button:disabled { opacity:.5; cursor:not-allowed; }
+input[type=password],input[type=file] { font:inherit; padding:6px; max-width:100%; }
+.flash { padding:10px 12px; border-radius:6px; margin-bottom:12px; border:1px solid var(--line); }
+.flash.error { border-color:var(--bad); color:var(--bad); } .flash.ok { border-color:var(--ok); color:var(--ok); }
+pre.log { background:#111; color:#ddd; padding:12px; border-radius:6px; max-height:60vh; overflow:auto; white-space:pre-wrap; font-size:12.5px; }
+form.inline { display:inline; }
+</style>
+</head>
+<body>
+<header><a href="/">TF Pi{% if board %} · {{ board }}{% endif %}</a>
+{% if session.user %}<form class="inline" method="post" action="/logout"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary">Log out</button></form>{% endif %}
+</header>
+<main>
+{% for category, message in get_flashed_messages(with_categories=true) %}<div class="flash {{ category }}">{{ message }}</div>{% endfor %}
+{% block body %}{% endblock %}
+</main>
+</body>
+</html>

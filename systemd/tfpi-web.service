@@ -1,0 +1,15 @@
+[Unit]
+Description=TF Pi firmware page
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Environment=PYTHONPATH=/opt/tfpi/lib
+WorkingDirectory=/opt/tfpi/lib
+ExecStart=/usr/bin/python3 -m tfpi.web --port 80
+Restart=on-failure
+# A running flash is a child process; let it finish if this service restarts.
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target
