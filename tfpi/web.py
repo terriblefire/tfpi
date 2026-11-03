@@ -310,15 +310,16 @@ def prune_jobs(keep=20):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--host", default="0.0.0.0")
+    # "*" = every IPv4 and IPv6 address; browsers often try the IPv6 .local address first.
+    parser.add_argument("--host", default="*")
     parser.add_argument("--port", type=int, default=80)
     args = parser.parse_args()
     app = create_app()
     try:
         from waitress import serve
-        serve(app, host=args.host, port=args.port, threads=4)
+        serve(app, listen=f"{args.host}:{args.port}", threads=4)
     except ImportError:
-        app.run(host=args.host, port=args.port, threaded=True)
+        app.run(host="::" if args.host == "*" else args.host, port=args.port, threaded=True)
 
 
 if __name__ == "__main__":
