@@ -65,7 +65,7 @@ apt-get update
 PKGS="git ca-certificates curl build-essential cmake pkg-config
       libusb-dev libftdi1-dev libgpiod-dev
       device-tree-compiler python3-dev python3-pip python3-virtualenv ifupdown iptables
-      python3-flask python3-waitress unzip"
+      python3-flask python3-waitress unzip fpga-icestorm"
 for optional in libftdi-dev python3-distutils; do
 	if apt-cache show "$optional" >/dev/null 2>&1; then PKGS="$PKGS $optional"; fi
 done
@@ -102,6 +102,32 @@ fetch xc3sprog "$XC3SPROG_REPO" "$xc3_ref"
 cmake -S "$SRC/xc3sprog" -B "$SRC/xc3sprog/build" -DUSE_FTD2XX=OFF -DCMAKE_BUILD_TYPE=Release
 cmake --build "$SRC/xc3sprog/build" -j"$(nproc)"
 cmake --install "$SRC/xc3sprog/build"
+
+# --- vasm + vlink (SSBL relink for the SPI ROM editor) -----------------------
+# tarball NAME URL SHA256 -> $SRC/NAME (checked, unpacked)
+tarball() {
+	local file=$SRC/dl/$(basename "$2")
+	mkdir -p "$SRC/dl"
+	[ -f "$file" ] && echo "$3  $file" | sha256sum -c --quiet 2>/dev/null || curl -fsSL -o "$file" "$2"
+	echo "$3  $file" | sha256sum -c --quiet
+	rm -rf "$SRC/$1" && mkdir -p "$SRC/$1"
+	tar -xzf "$file" -C "$SRC/$1" --strip-components=1
+}
+if [ "$(cat /usr/local/share/tfpi/vasm.url 2>/dev/null)" != "$VASM_URL" ] || ! command -v vasmm68k_mot >/dev/null; then
+	tarball vasm "$VASM_URL" "$VASM_SHA256"
+	make -C "$SRC/vasm" CPU=m68k SYNTAX=mot -j"$(nproc)"
+	install -m755 "$SRC/vasm/vasmm68k_mot" /usr/local/bin/vasmm68k_mot
+	install -d /usr/local/share/tfpi && echo "$VASM_URL" > /usr/local/share/tfpi/vasm.url
+fi
+if [ "$(cat /usr/local/share/tfpi/vlink.url 2>/dev/null)" != "$VLINK_URL" ] || ! command -v vlink >/dev/null; then
+	tarball vlink "$VLINK_URL" "$VLINK_SHA256"
+	mkdir -p "$SRC/vlink/objects"
+	make -C "$SRC/vlink" -j"$(nproc)"
+	install -m755 "$SRC/vlink/vlink" /usr/local/bin/vlink
+	install -d /usr/local/share/tfpi && echo "$VLINK_URL" > /usr/local/share/tfpi/vlink.url
+fi
+vasmm68k_mot -v 2>&1 | head -1
+vlink -v 2>&1 | head -1
 
 # --- a314 (TF build) via its own installer ----------------------------------
 # install-pi.sh builds as $SUDO_USER, so the checkout belongs to the Pi user.

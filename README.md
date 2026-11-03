@@ -63,6 +63,25 @@ set in `/etc/tfpi/tfpi.conf` (`BOARD=tf4060r5`).
 
 The page is meant for your home network only. Don't forward it to the internet.
 
+## Customise the SPI ROM (SSBL and ROMFS)
+
+Upload an **SDK zip** (`tf4060r5_..._SDK.zip`) instead of a release and the page opens the
+SPI ROM editor. A full-image release zip has a **Customise SPI ROM** button on its review page.
+
+- **Resident modules**: what the SSBL loads at boot (ehide.device, NCR scsi.device,
+  spiromfs, ...), with name, version and size. Add, remove or reorder them. An added
+  module needs a ROMTag; files without one (plain programs, blabber.driver) belong in the
+  ROMFS. Changing modules relinks the SSBL with vasm/vlink, which needs SDKs that carry
+  the SSBL objects (`ssbl/*.o` and `ssbl/toc.i`). Before the first relink the Pi rebuilds
+  the unchanged SSBL and checks it matches the SDK's byte for byte.
+- **ROMFS** (TF4060:): every file with its size. Add files to any folder (executables keep
+  their execute flag; same name replaces), remove files or folders.
+- A meter shows the SPI ROM size against the limit: flash size (`SPI_FLASH_BYTES` in
+  `/etc/tfpi/tfpi.conf`, default 2 MB) minus the 0x21000 bitstream area. Changes that
+  don't fit are refused.
+- **Build firmware** makes a normal firmware zip (flash image + README of the changes),
+  with the bitstream built from the SDK by icebram/icepack, and opens the review page.
+
 ## Command line
 
 ```
@@ -81,6 +100,8 @@ Pinned in [`sources.conf`](sources.conf):
 - `xc3sprog` from arkadiuszmakarenko/xc3sprog (cable `gpiod_creator`) → `/usr/local/bin/xc3sprog`
 - a314 from erique/a314 branch `tf4060`, installed with its own `install-pi.sh tf`
   (a314d, SPI overlay, config.txt/cmdline.txt changes, a314 Python services)
+- vasm 2.0d and vlink 0.18a built from source (SHA-256 pinned), `fpga-icestorm` from apt:
+  used by the SPI ROM editor
 - this repo → `/opt/tfpi`, web page as `tfpi-web.service` on port 80
 
 `fomu-flash` drives the BCM GPIO block directly, so a Pi 5 is not supported.

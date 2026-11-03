@@ -21,10 +21,19 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 
 from . import config
+from . import custom, sdk
 from .flasher import plan
 from .fwimage import FirmwareError, load_release
 
 TOKEN_CHARS = set("0123456789abcdef")
+
+
+def secure_amiga_name(filename):
+    """Keep the file's own name (spaces and case matter on the Amiga), minus
+    any path and characters AmigaDOS can't use."""
+    name = filename.replace("\\", "/").rsplit("/", 1)[-1]
+    name = "".join(c for c in name if c >= " " and c not in ':/"')
+    return name.strip()[:30] or "file"
 
 
 def web_conf():
@@ -219,7 +228,111 @@ def create_app():
         if not name.lower().endswith(".zip"):
             flash("Choose a firmware .zip file.", "error")
             return redirect(url_for("index"))
-        return redirect(url_for("review", token=new_upload(file, name)))
+        token = new_upload(file, name)
+        if sdk.is_sdk(upload_zip(token)):
+            return start_custom(upload_zip(token), name)
+        return redirect(url_for("review", token=token))
+
+    def start_custom(path, name):
+        try:
+            session_token = custom.create(path, name)
+        except (custom.CustomError, ValueError) as error:
+            flash(f"{name}: {error}", "error")
+            return redirect(url_for("index"))
+        finally:
+            shutil.rmtree(path.parent, ignore_errors=True)     # the session keeps its own copy
+        return redirect(url_for("custom_page", token=session_token))
+
+    @app.post("/review/<token>/customise")
+    @login_required
+    def customise_release(token):
+        path = upload_zip(token)
+        try:
+            session_token = custom.create(path, path.name)
+        except (custom.CustomError, ValueError) as error:
+            flash(f"{path.name}: {error}", "error")
+            return redirect(url_for("review", token=token))
+        return redirect(url_for("custom_page", token=session_token))
+
+    def custom_session(token):
+        try:
+            return custom.Session(token)
+        except custom.CustomError:
+            abort(404)
+
+    @app.get("/custom/<token>")
+    @login_required
+    def custom_page(token):
+        session_ = custom_session(token)
+        try:
+            base = session_.base()
+            modules = session_.modules()
+            volume, root = session_.romfs()
+            size, limit = session_.estimate()
+        except (custom.CustomError, ValueError) as error:
+            flash(f"Can't open this SDK: {error}", "error")
+            return redirect(url_for("index"))
+        from .spirom import walk
+        tree = [(path, node) for path, node in walk(root)]
+        folders = sorted({p for p, n in tree if n.is_dir()}, key=str.lower)
+        added = {a["path"].lower() for a in session_.edits["add"]}
+        return render_template("custom.html", token=token, base=base, modules=modules,
+                               volume=volume, tree=tree, folders=folders, added=added,
+                               size=size, limit=limit, changed=session_.toc_changed(),
+                               edits=session_.edits, flash_bytes=custom.flash_bytes())
+
+    def custom_action(token, action):
+        session_ = custom_session(token)
+        try:
+            action(session_)
+        except (custom.CustomError, ValueError) as error:
+            flash(str(error), "error")
+        return redirect(url_for("custom_page", token=token))
+
+    def uploaded_file():
+        file = request.files.get("file")
+        if not file or not file.filename:
+            raise custom.CustomError("choose a file")
+        data = file.read()
+        if not data:
+            raise custom.CustomError("that file is empty")
+        return secure_amiga_name(file.filename), data
+
+    @app.post("/custom/<token>/module")
+    @login_required
+    def custom_add_module(token):
+        return custom_action(token, lambda s: s.add_module(*uploaded_file()))
+
+    @app.post("/custom/<token>/module/<int:index>/<what>")
+    @login_required
+    def custom_module(token, index, what):
+        if what == "remove":
+            return custom_action(token, lambda s: s.remove_module(index))
+        if what in ("up", "down"):
+            return custom_action(token, lambda s: s.move_module(index, -1 if what == "up" else 1))
+        abort(404)
+
+    @app.post("/custom/<token>/file")
+    @login_required
+    def custom_add_file(token):
+        return custom_action(token, lambda s: s.add_file(request.form.get("folder", ""), *uploaded_file()))
+
+    @app.post("/custom/<token>/remove")
+    @login_required
+    def custom_remove(token):
+        return custom_action(token, lambda s: s.remove_path(request.form.get("path", "")))
+
+    @app.post("/custom/<token>/build")
+    @login_required
+    def custom_build(token):
+        session_ = custom_session(token)
+        try:
+            built = session_.build()
+        except (custom.CustomError, sdk.SdkError, ValueError) as error:
+            flash(f"Build failed: {error}", "error")
+            return redirect(url_for("custom_page", token=token))
+        flash(f"Built {built.name}. Review it below, then flash.", "ok")
+        return redirect(url_for("review", token=new_upload(built, built.name)))
 
     @app.post("/stored/<name>")
     @login_required

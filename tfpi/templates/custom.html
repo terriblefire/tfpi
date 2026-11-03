@@ -1,0 +1,54 @@
+{% extends "base.html" %}{% block body %}
+{% set pct = (100 * size / limit) | round(1) %}
+<div class="card"><h1>SPI ROM editor</h1>
+<p class="mono">{{ base.name }}</p>
+<p class="muted">{{ base.kind }} for {{ base.board }} · ROMFS volume "{{ volume }}" ·
+{% if base.can_relink %}resident modules can be changed{% else %}<span class="warn">no SSBL objects in this {{ base.kind }}: only ROMFS changes are possible</span>{% endif %}</p>
+<div class="meter" title="{{ size }} of {{ limit }} bytes"><div style="width: {{ [pct, 100] | min }}%" class="{{ 'bad' if size > limit else '' }}"></div></div>
+<p><b>{{ "{:,}".format(size) }}</b> of {{ "{:,}".format(limit) }} bytes ({{ pct }}%) · {{ "{:,}".format(limit - size) }} free
+<span class="muted">· limit = {{ (flash_bytes // 1024) }} KB flash minus the bitstream area (0x21000){% if changed %} · module sizes are estimates until you build{% endif %}</span></p>
+<form method="post" action="/custom/{{ token }}/build" onsubmit="this.querySelector('button').disabled=true; this.querySelector('button').textContent='Building… (up to a minute)'">
+<input type="hidden" name="csrf" value="{{ csrf }}">
+<button>Build firmware</button> <span class="muted">Makes a firmware zip and opens the usual review page. Nothing is flashed until you confirm there.</span>
+</form></div>
+
+<div class="card"><h2>Resident modules (SSBL TOC, loaded at boot in this order)</h2>
+<table>
+<tr><th style="width:2em">#</th><th style="width:auto">Module</th><th style="width:6em">Bytes</th><th style="width:1%"></th></tr>
+{% for module, entry in modules %}
+<tr><td>{{ loop.index0 }}</td>
+<td><b>{{ module.name or "(no ROMTag)" }}</b>{% if "file" in entry %} <span class="ok">added</span>{% endif %}<br><span class="muted">{{ module.idstring }}</span>
+{% if module.name == "spiromfs" %}<br><span class="warn">mounts TF4060: (the ROMFS); keep it</span>{% endif %}</td>
+<td>{{ "{:,}".format(module.size) }}</td>
+<td style="white-space:nowrap">{% if base.can_relink %}
+<form class="inline" method="post" action="/custom/{{ token }}/module/{{ loop.index0 }}/up"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary" {% if loop.first %}disabled{% endif %} title="Earlier">↑</button></form>
+<form class="inline" method="post" action="/custom/{{ token }}/module/{{ loop.index0 }}/down"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary" {% if loop.last %}disabled{% endif %} title="Later">↓</button></form>
+<form class="inline" method="post" action="/custom/{{ token }}/module/{{ loop.index0 }}/remove"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary">Remove</button></form>
+{% endif %}</td></tr>
+{% endfor %}
+</table>
+{% if base.can_relink %}
+<form method="post" action="/custom/{{ token }}/module" enctype="multipart/form-data" style="margin-top:12px"><input type="hidden" name="csrf" value="{{ csrf }}">
+<input type="file" name="file" required> <button>Add resident module</button>
+<p class="muted">A .device/.library/resident with a ROMTag, e.g. a314.device. It's added last; use the arrows to move it. Plain programs and drivers without a ROMTag go in the ROMFS below.</p>
+</form>{% endif %}
+</div>
+
+<div class="card"><h2>ROMFS (TF4060:)</h2>
+<form method="post" action="/custom/{{ token }}/file" enctype="multipart/form-data"><input type="hidden" name="csrf" value="{{ csrf }}">
+<p><input type="file" name="file" required>
+into folder <input name="folder" list="folders" placeholder="(top level)" style="font:inherit;padding:6px;width:12em">
+<datalist id="folders">{% for f in (folders + ["Devs", "C", "L", "Libs"]) | unique %}<option value="{{ f }}">{% endfor %}</datalist>
+<button>Add file</button></p>
+<p class="muted">A file with the same name in that folder is replaced. New folders are created as needed. Amiga executables keep their execute flag.</p>
+</form>
+<table>
+{% for path, node in tree %}
+<tr><td class="mono" style="padding-left: {{ 8 + 16 * (path.count('/')) }}px">{% if node.is_dir() %}📁 {% endif %}{{ node.name }}{% if path.lower() in added %} <span class="ok">added</span>{% endif %}</td>
+<td style="width:7em" class="muted">{% if not node.is_dir() %}{{ "{:,}".format(node.data | length) }}{% endif %}</td>
+<td style="width:1%"><form class="inline" method="post" action="/custom/{{ token }}/remove"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="path" value="{{ path }}"><button class="secondary" title="Remove {{ path }}">Remove</button></form></td></tr>
+{% endfor %}
+</table>
+{% if edits.remove %}<p class="muted">Removed: {{ edits.remove | join(", ") }}</p>{% endif %}
+</div>
+{% endblock %}
