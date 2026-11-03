@@ -1,10 +1,10 @@
 """Flash a TF firmware release zip onto the board attached to this Pi.
 
 Ported from tf4060/boards/tf4060r5/flash_ram.sh and flash_bus.sh:
-  * a314d shares the SPI pins with the programmer, so it is stopped for the
-    flash and always restarted afterwards;
-  * FPGA: fomu-flash -u -w, read the flash back and compare, fomu-flash -r,
-    setgpio.sh, wait for CDONE (GPIO 23);
+  * a314d keeps running: it backs off the SPI pins by itself;
+  * FPGA: identify the SPI flash by JEDEC ID (fomu-flash -i), check the image
+    fits, fomu-flash -u -w, read the image length back (-b) and compare,
+    fomu-flash -r, setgpio.sh, wait for CDONE (GPIO 23);
   * CPLD: xc3sprog -c gpiod_creator -p 0 -v, ONE attempt only. A CPLD that
     fails erase/verify is failing; more cycles destroy it. After a failure the
     CPLD is locked out until someone runs `tfpi-flash clear-cpld-fault`.
@@ -72,23 +72,6 @@ def flash_lock():
         yield
 
 
-@contextmanager
-def a314d_stopped():
-    """Stop a314d for the duration, restart it if it was running."""
-    rc = subprocess.run([config.SYSTEMCTL, "is-active", "--quiet", config.A314_SERVICE]).returncode
-    was_active = rc == 0
-    if was_active:
-        log("stopping a314d (it shares the SPI pins with the programmer)")
-        run([config.SYSTEMCTL, "stop", config.A314_SERVICE])
-    try:
-        yield
-    finally:
-        if was_active:
-            log("restarting a314d")
-            if run([config.SYSTEMCTL, "start", config.A314_SERVICE])[0]:
-                log("WARNING: could not restart a314d")
-
-
 def plan(release, state, force_fpga=False, force_cpld=False):
     """Decide which chips to flash. Returns a dict the web page shows as-is."""
     fpga_same = release.fpga_sha == state["fpga"]["sha"]
@@ -115,6 +98,50 @@ def plan(release, state, force_fpga=False, force_cpld=False):
     return result
 
 
+# JEDEC ID (manufacturer, type, capacity byte) -> (name, bytes) for parts whose
+# capacity byte isn't log2(size). Others fall back to 1 << capacity byte.
+SPI_FLASH_PARTS = {
+    (0xbf, 0x26, 0x41): ("Microchip SST26VF016B", 2 * 1024 * 1024),
+    (0xbf, 0x26, 0x42): ("Microchip SST26VF032B", 4 * 1024 * 1024),
+    (0xbf, 0x26, 0x43): ("Microchip SST26VF064B", 8 * 1024 * 1024),
+    (0x1f, 0x86, 0x01): ("Adesto AT25SF161", 2 * 1024 * 1024),
+}
+MANUFACTURERS = {0xbf: "Microchip/SST", 0xef: "Winbond", 0xc8: "GigaDevice", 0xc2: "Macronix",
+                 0x20: "Micron/ST", 0x9d: "ISSI", 0x1f: "Adesto", 0x01: "Spansion/Cypress"}
+
+
+def parse_spi_id(text):
+    """Parse `fomu-flash -i` output into (manufacturer, type, capacity) or None."""
+    def field(pattern):
+        found = re.search(pattern, text, re.M)
+        return int(found.group(1), 16) if found else None
+    maker = field(r"^!! JEDEC Manufacturer ID:\s*([0-9a-f]{2})")
+    if maker is None:
+        maker = field(r"^Manufacturer ID:.*\(([0-9a-f]{2})\)")
+    kind = field(r"^Memory model:.*\(([0-9a-f]{2})\)")
+    size = field(r"^Memory size:.*\(([0-9a-f]{2})\)")
+    if None in (maker, kind, size) or maker in (0x00, 0xff):
+        return None
+    return maker, kind, size
+
+
+def lookup_spi_flash(jedec):
+    """(name, bytes) for a JEDEC ID; bytes is None when the size can't be known."""
+    if jedec in SPI_FLASH_PARTS:
+        return SPI_FLASH_PARTS[jedec]
+    maker, kind, size = jedec
+    name = f"{MANUFACTURERS.get(maker, 'unknown')} {maker:02x} {kind:02x} {size:02x}"
+    return name, (1 << size) if 0x10 <= size <= 0x1a else None
+
+
+def identify_spi_flash():
+    rc, output = run([config.FOMU_FLASH, "-i"])
+    jedec = parse_spi_id(output) if rc == 0 else None
+    if jedec is None:
+        raise FlashError("could not read the SPI flash JEDEC ID; is the board powered?")
+    return lookup_spi_flash(jedec)
+
+
 def wait_for_cdone(seconds=5.0):
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
@@ -131,6 +158,10 @@ def flash_fpga(release, state, work):
     readback = work / "readback.bin"
     image.write_bytes(release.fpga_image)
     fpga = state["fpga"]
+    name, size = identify_spi_flash()
+    log(f"FPGA: SPI flash is {name}, " + (f"{size // 1024} KB" if size else "size unknown"))
+    if size and len(release.fpga_image) > size:
+        raise FlashError(f"image is {len(release.fpga_image)} bytes, the flash holds {size}")
     fpga["flashes"] += 1
     fpga["time"] = config.now()
     fpga["sha"] = None          # unknown until verified
@@ -144,7 +175,8 @@ def flash_fpga(release, state, work):
 
     log("FPGA: reading the SPI flash back to verify")
     readback.unlink(missing_ok=True)
-    rc, _ = run([config.FOMU_FLASH, "-s", readback])
+    # -b: fomu-flash only knows a few flash IDs; read exactly the image length.
+    rc, _ = run([config.FOMU_FLASH, "-b", len(release.fpga_image), "-s", readback])
     data = readback.read_bytes() if readback.exists() else b""
     if rc or len(data) < len(release.fpga_image):
         fpga["last_result"] = "readback-failed"
@@ -228,11 +260,10 @@ def flash(zip_path, name=None, force_fpga=False, force_cpld=False):
             work = config.STATE_DIR / "work"
             work.mkdir(parents=True, exist_ok=True)
             try:
-                with a314d_stopped():
-                    if todo["fpga"]:
-                        flash_fpga(release, state, work)
-                    if todo["cpld"]:
-                        flash_cpld(release, state, work)
+                if todo["fpga"]:
+                    flash_fpga(release, state, work)
+                if todo["cpld"]:
+                    flash_cpld(release, state, work)
             except Exception as error:
                 entry["result"] = f"FAILED: {error}"
                 raise

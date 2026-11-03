@@ -63,7 +63,13 @@ STUBS = {
             open(flash, "wb").write(data + b"\xff" * 4096)
             print("wrote", len(data))
         elif "-s" in args:
-            shutil.copyfile(flash, args[args.index("-s") + 1])
+            if "-b" not in args:   # like the real board: flash size not detected
+                print("unknown spi flash size -- specify with -b"); sys.exit(1)
+            size = int(args[args.index("-b") + 1], 0)
+            open(args[args.index("-s") + 1], "wb").write(open(flash, "rb").read()[:size])
+        elif "-i" in args:
+            print(os.environ.get("FAKE_SPI_ID", "Manufacturer ID: unknown (ff)\n!! JEDEC Manufacturer ID: bf\n"
+                  "Memory model: unknown (26)\nMemory size: unknown (41)\nDevice ID: ff"))
         elif "-r" in args:
             print("reset")
     ''',
@@ -117,7 +123,7 @@ class Sandbox(unittest.TestCase):
             "FAKE_A314": str(self.tmp / "a314"),
         }
         self._saved = {key: os.environ.get(key) for key in
-                       list(self.env) + ["FAKE_FOMU_CORRUPT", "FAKE_XC3_FAIL", "FAKE_CDONE_LOW"]}
+                       list(self.env) + ["FAKE_FOMU_CORRUPT", "FAKE_XC3_FAIL", "FAKE_CDONE_LOW", "FAKE_SPI_ID"]}
         os.environ.update(self.env)
         (self.tmp / "etc").mkdir()
         (self.tmp / "a314").write_text("active")

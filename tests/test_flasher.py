@@ -20,8 +20,7 @@ class FlasherTests(Sandbox):
         self.assertIsNotNone(state["fpga"]["sha"])
         self.assertEqual(state["cpld"]["device"], "XC95288XL-10-TQ144")
         self.assertEqual(self.cpld_flashes(), 1)
-        self.assertEqual((self.tmp / "a314").read_text(), "active")      # restarted
-        self.assertIn("stop a314d", self.systemctl_log())
+        self.assertFalse((self.tmp / "a314.log").exists())               # a314d left alone
         self.assertTrue((config.FIRMWARE_DIR / "r1.zip").exists())
 
         self.assertEqual(self.flash(z), 0)
@@ -43,7 +42,6 @@ class FlasherTests(Sandbox):
         self.assertEqual(state["fpga"]["last_result"], "verify-failed")
         self.assertIsNone(state["release"])
         self.assertEqual(self.cpld_flashes(), 0)
-        self.assertEqual((self.tmp / "a314").read_text(), "active")
         self.assertFalse(config.read_json(self.tmp / "res.json", {})["ok"])
 
     def test_cdone_low_fails(self):
@@ -66,10 +64,25 @@ class FlasherTests(Sandbox):
         self.assertEqual(self.flash(self.release("b.zip", cpld=1)), 0)
         self.assertEqual(self.cpld_flashes(), 2)
 
-    def test_a314d_left_stopped_if_it_was_stopped(self):
-        (self.tmp / "a314").write_text("inactive")
-        self.flash(self.release())
-        self.assertNotIn("start a314d", self.systemctl_log())
+    def test_spi_flash_id(self):
+        sst = "Manufacturer ID: unknown (ff)\n!! JEDEC Manufacturer ID: bf\nMemory model: unknown (26)\nMemory size: unknown (41)\n"
+        winbond = "Manufacturer ID: Winbond (ef)\nMemory model: W25Q128JV (70)\nMemory size: 128 Mbit (18)\n"
+        self.assertEqual(flasher.lookup_spi_flash(flasher.parse_spi_id(sst)),
+                         ("Microchip SST26VF016B", 2 * 1024 * 1024))
+        self.assertEqual(flasher.lookup_spi_flash(flasher.parse_spi_id(winbond))[1], 16 * 1024 * 1024)
+        self.assertIsNone(flasher.parse_spi_id("Manufacturer ID: unknown (ff)\nMemory model: unknown (ff)\nMemory size: unknown (ff)\n"))
+
+    def test_no_flash_id_fails_before_writing(self):
+        os.environ["FAKE_SPI_ID"] = "Manufacturer ID: unknown (ff)\nMemory model: unknown (ff)\nMemory size: unknown (ff)"
+        self.assertEqual(self.flash(self.release()), 1)
+        self.assertFalse((self.tmp / "spiflash.bin").exists())
+        self.assertEqual(config.load_state()["fpga"]["flashes"], 0)
+        self.assertEqual(self.cpld_flashes(), 0)
+
+    def test_image_larger_than_flash_refused(self):
+        os.environ["FAKE_SPI_ID"] = "Manufacturer ID: x (ef)\nMemory model: x (40)\nMemory size: x (10)"   # 64 KB
+        self.assertEqual(self.flash(self.release()), 1)
+        self.assertFalse((self.tmp / "spiflash.bin").exists())
 
     def test_force_flags(self):
         z = self.release()

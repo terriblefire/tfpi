@@ -42,17 +42,17 @@ how many times each chip has been programmed.
 
 | File | Needed | Notes |
 |---|---|---|
-| `<board>_ram.bin` | yes | Full SPI flash image, or a raw iCE40 bitstream |
-| `<board>_bus_top.jed` | no | BUS CPLD (falls back to `<board>_bus.jed`) |
-| `seed.txt` | no | Shown on the page |
+| `<board>_ram_flash.bin` or `<board>_ram.bin` | yes | Full SPI flash image, or a raw iCE40 bitstream |
+| `*.jed` | no | BUS CPLD. With several, `_bus_prod`, then `_bus_top`, then `_bus` is used |
+| `seed.txt` | no | Shown on the page (else "seed N" from `README.md`) |
 | `spirom.img` | raw bitstreams only | SSBL/ROMFS combined at 0x21000; can also be placed at `/etc/tfpi/spirom.img` |
 
-Zips for another board (the prefix before `_ram.bin`) are refused. The board is
+Files may be inside a folder in the zip. Zips for another board (the prefix before `_ram`) are refused. The board is
 set in `/etc/tfpi/tfpi.conf` (`BOARD=tf4060r5`).
 
 ### Safety rules built in
 
-- a314d is stopped during the flash (it shares the SPI pins) and restarted after.
+- The SPI flash is identified by its JEDEC ID first; an image bigger than the chip is refused.
 - The FPGA flash is read back and compared before the FPGA is reset; then CDONE
   (GPIO 23) must go high.
 - The CPLD is programmed **once** per flash, with verify. If erase or verify
