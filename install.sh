@@ -85,14 +85,15 @@ needed() { # needed NAME REF BINARY: true if NAME must be (re)built
 # fetch NAME REPO REF [OWNER]: clone/update $SRC/NAME and check out REF
 fetch() {
 	local dir=$SRC/$1
-	if [ -d "$dir/.git" ]; then
-		git -C "$dir" remote set-url origin "$2"
-		git -C "$dir" fetch --quiet --tags origin
-	else
+	# A checkout damaged by a power cut (the Pi loses power with the Amiga)
+	# is thrown away and cloned again.
+	if ! { [ -d "$dir/.git" ] && git -C "$dir" remote set-url origin "$2" \
+			&& git -C "$dir" fetch --quiet --tags origin \
+			&& git -C "$dir" checkout --quiet --force --detach "$3"; }; then
 		rm -rf "$dir"
 		git clone --quiet "$2" "$dir"
+		git -C "$dir" checkout --quiet --force --detach "$3"
 	fi
-	git -C "$dir" checkout --quiet --force --detach "$3"
 	git -C "$dir" clean -fdxq
 	[ -z "${4:-}" ] || chown -R "$4": "$dir"
 	echo "$1 at $(git -C "$dir" rev-parse --short HEAD)"
@@ -177,7 +178,12 @@ install -m644 "$self_dir/systemd/tfpi-web.service" /etc/systemd/system/tfpi-web.
 
 # ref: what is installed. a314d_sha256: the a314d this installer built (the
 # page uses it to warn when a locally built a314d would be replaced).
-ver() { printf '"%s": {"repo": "%s", "ref": "%s"%s}' "$1" "$2" "$(git -C "$SRC/$1" rev-parse HEAD)" "${3:-}"; }
+# If a skipped part's checkout can't be read, keep the ref recorded last time.
+ver() {
+	local ref
+	ref=$(git -C "$SRC/$1" rev-parse HEAD 2>/dev/null) || ref=$(prev "$1" ref)
+	printf '"%s": {"repo": "%s", "ref": "%s"%s}' "$1" "$2" "$ref" "${3:-}"
+}
 {
 	echo "{"
 	ver tfpi "$TFPI_REPO"; echo ","
