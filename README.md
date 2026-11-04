@@ -100,6 +100,20 @@ delete and make folders from the list.
 - a314fs keeps protection bits and comments in `<name>:a314` files; these are
   hidden here and follow their file when it is renamed or deleted.
 
+## Updating the Pi software
+
+The page checks GitHub for a newer tfpi about twice a day (or on **Check for
+updates**) and, if there is one, lists the new commits and an **Update now**
+button. That runs `tfpi-update` with a live log, in its own systemd unit so
+the page restarting halfway doesn't stop it.
+
+Only parts whose pinned commit changed in `sources.conf` are rebuilt. a314d is
+stopped only when the a314 pin changes; the page says so before you press the
+button (the Amiga loses PI0: and the other a314 services for a few minutes),
+and also warns if the a314d on the Pi isn't the one the installer built. No
+flash can start while an update runs. `sudo TFPI_REBUILD=1 tfpi-update`
+rebuilds everything.
+
 ## Command line
 
 ```

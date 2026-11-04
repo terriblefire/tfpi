@@ -72,6 +72,16 @@ done
 # shellcheck disable=SC2086
 apt-get install -y --no-install-recommends $PKGS
 
+# Parts whose pinned commit hasn't changed since the last install are left
+# alone (no rebuild; a314d keeps running). TFPI_REBUILD=1 rebuilds everything.
+prev() {   # prev NAME FIELD: a value recorded by the last install
+	python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get(sys.argv[2],{}).get(sys.argv[3],""))' \
+		"$PREFIX/versions.json" "$1" "$2" 2>/dev/null || true
+}
+needed() { # needed NAME REF BINARY: true if NAME must be (re)built
+	[ -n "${TFPI_REBUILD:-}" ] || [ ! -x "$3" ] || [ "$(prev "$1" ref)" != "$2" ] || return 1
+}
+
 # fetch NAME REPO REF [OWNER]: clone/update $SRC/NAME and check out REF
 fetch() {
 	local dir=$SRC/$1
@@ -89,19 +99,27 @@ fetch() {
 }
 
 # --- fomu-flash -------------------------------------------------------------
-fetch fomu-flash "$FOMU_FLASH_REPO" "$FOMU_FLASH_REF"
-make -C "$SRC/fomu-flash" -j"$(nproc)"
-install -m755 "$SRC/fomu-flash/fomu-flash" /usr/local/bin/fomu-flash
+if needed fomu-flash "$FOMU_FLASH_REF" /usr/local/bin/fomu-flash; then
+	fetch fomu-flash "$FOMU_FLASH_REPO" "$FOMU_FLASH_REF"
+	make -C "$SRC/fomu-flash" -j"$(nproc)"
+	install -m755 "$SRC/fomu-flash/fomu-flash" /usr/local/bin/fomu-flash
+else
+	echo "fomu-flash: unchanged"
+fi
 
 # --- xc3sprog (gpiod_creator cable) ----------------------------------------
 gpiod_major=$(pkg-config --modversion libgpiod | cut -d. -f1)
 if [ "$gpiod_major" -ge 2 ]; then xc3_ref=$XC3SPROG_REF; else xc3_ref=$XC3SPROG_REF_GPIOD1; fi
 echo "libgpiod $(pkg-config --modversion libgpiod): xc3sprog ${xc3_ref:0:7}"
-rm -rf "$SRC/xc3sprog/build"
-fetch xc3sprog "$XC3SPROG_REPO" "$xc3_ref"
-cmake -S "$SRC/xc3sprog" -B "$SRC/xc3sprog/build" -DUSE_FTD2XX=OFF -DCMAKE_BUILD_TYPE=Release
-cmake --build "$SRC/xc3sprog/build" -j"$(nproc)"
-cmake --install "$SRC/xc3sprog/build"
+if needed xc3sprog "$xc3_ref" /usr/local/bin/xc3sprog; then
+	rm -rf "$SRC/xc3sprog/build"
+	fetch xc3sprog "$XC3SPROG_REPO" "$xc3_ref"
+	cmake -S "$SRC/xc3sprog" -B "$SRC/xc3sprog/build" -DUSE_FTD2XX=OFF -DCMAKE_BUILD_TYPE=Release
+	cmake --build "$SRC/xc3sprog/build" -j"$(nproc)"
+	cmake --install "$SRC/xc3sprog/build"
+else
+	echo "xc3sprog: unchanged"
+fi
 
 # --- vasm + vlink (SSBL relink for the SPI ROM editor) -----------------------
 # tarball NAME URL SHA256 -> $SRC/NAME (checked, unpacked)
@@ -131,9 +149,19 @@ vlink -v 2>&1 | head -1
 
 # --- a314 (TF build) via its own installer ----------------------------------
 # install-pi.sh builds as $SUDO_USER, so the checkout belongs to the Pi user.
-fetch a314 "$A314_REPO" "$A314_REF" "$A314_USER"
-systemctl stop a314d 2>/dev/null || true
-(cd "$SRC/a314/Software" && SUDO_USER=$A314_USER bash ./install-pi.sh tf)
+# This is the only step that interrupts a314d.
+a314_built=0
+a314d_sha=$(prev a314 a314d_sha256)
+if needed a314 "$A314_REF" /opt/a314/a314d; then
+	fetch a314 "$A314_REPO" "$A314_REF" "$A314_USER"
+	echo "a314: stopping a314d to rebuild it"
+	systemctl stop a314d 2>/dev/null || true
+	(cd "$SRC/a314/Software" && SUDO_USER=$A314_USER bash ./install-pi.sh tf)
+	a314_built=1
+	a314d_sha=$(sha256sum /opt/a314/a314d | cut -d" " -f1)
+else
+	echo "a314: unchanged, a314d left running"
+fi
 
 # --- tfpi web page + flasher ------------------------------------------------
 install -d "$PREFIX/lib"
@@ -147,15 +175,18 @@ done
 [ -f /etc/tfpi/tfpi.conf ] || echo "BOARD=$BOARD" > /etc/tfpi/tfpi.conf
 install -m644 "$self_dir/systemd/tfpi-web.service" /etc/systemd/system/tfpi-web.service
 
-ver() { printf '"%s": {"repo": "%s", "ref": "%s"}' "$1" "$2" "$(git -C "$SRC/$1" rev-parse HEAD)"; }
+# ref: what is installed. a314d_sha256: the a314d this installer built (the
+# page uses it to warn when a locally built a314d would be replaced).
+ver() { printf '"%s": {"repo": "%s", "ref": "%s"%s}' "$1" "$2" "$(git -C "$SRC/$1" rev-parse HEAD)" "${3:-}"; }
 {
 	echo "{"
 	ver tfpi "$TFPI_REPO"; echo ","
 	ver fomu-flash "$FOMU_FLASH_REPO"; echo ","
 	ver xc3sprog "$XC3SPROG_REPO"; echo ","
-	ver a314 "$A314_REPO"; echo
+	ver a314 "$A314_REPO" ", \"a314d_sha256\": \"$a314d_sha\""; echo
 	echo "}"
-} > "$PREFIX/versions.json"
+} > "$PREFIX/versions.json.new"
+mv "$PREFIX/versions.json.new" "$PREFIX/versions.json"
 
 systemctl daemon-reload
 systemctl enable tfpi-web.service
@@ -178,7 +209,7 @@ command -v xc3sprog fomu-flash /opt/a314/a314d || true
 if [ "$first_install" = 1 ] && [ -z "${TFPI_NO_REBOOT:-}" ]; then
 	echo "Rebooting to load the a314 SPI overlay..."
 	systemctl reboot
-else
+elif [ "$a314_built" = 1 ]; then
 	# install-pi.sh leaves a314d stopped and expects a reboot.
 	systemctl start a314d || echo "a314d did not start; reboot to load the SPI overlay"
 	echo "Reboot if config.txt changed (a314 SPI overlay): sudo reboot"

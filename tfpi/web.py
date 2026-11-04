@@ -21,7 +21,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 
 from . import config
-from . import custom, files, sdk
+from . import custom, files, sdk, update
 from .flasher import plan
 from .fwimage import FirmwareError, load_release
 
@@ -205,10 +205,51 @@ def create_app():
                         reverse=True) if config.FIRMWARE_DIR.is_dir() else []
         job = current_job()
         status = job_status(job)[0] if job else None
+        if app.config.get("UPDATE_AUTOCHECK") and update.stale():
+            background_check()
         return render_template("index.html", state=state, stored=[p.name for p in stored],
                                versions=config.read_json(config.VERSIONS_FILE, {}),
                                a314d=a314d_state(), job=job, job_state=status,
-                               spirom=config.SPIROM_FILE.exists())
+                               spirom=config.SPIROM_FILE.exists(), update=update.cached(),
+                               updating=update.running())
+
+    checking = threading.Lock()
+
+    def background_check():
+        def work():
+            try:
+                update.check()
+            finally:
+                checking.release()
+        if checking.acquire(blocking=False):
+            threading.Thread(target=work, daemon=True).start()
+
+    @app.post("/update/check")
+    @login_required
+    def update_check():
+        result = update.check()
+        if result.get("error"):
+            flash(f"Couldn't check for updates: {result['error']}", "error")
+        elif not result.get("available"):
+            flash("This Pi is up to date.", "ok")
+        return redirect(url_for("index"))
+
+    @app.post("/update/start")
+    @login_required
+    def update_start():
+        if flash_running() or update.running():
+            flash("A flash or update is already running.", "error")
+            return redirect(url_for("index"))
+        config.JOB_DIR.mkdir(parents=True, exist_ok=True)
+        job = "update-" + time.strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(3)
+        try:
+            update.start(config.JOB_DIR, job, str(Path(__file__).resolve().parent.parent))
+        except update.UpdateError as error:
+            flash(f"Couldn't start the update: {error}", "error")
+            return redirect(url_for("index"))
+        (config.JOB_DIR / "current").write_text(job)
+        prune_jobs()
+        return redirect(url_for("job_page", job=job))
 
     @app.get("/api/status")
     @login_required
@@ -370,8 +411,8 @@ def create_app():
     @login_required
     def start_flash(token):
         path = upload_zip(token)
-        if flash_running():
-            flash("A flash is already running.", "error")
+        if flash_running() or update.running():
+            flash("A flash or software update is already running.", "error")
             return redirect(url_for("index"))
         config.JOB_DIR.mkdir(parents=True, exist_ok=True)
         job = time.strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(3)
@@ -537,6 +578,7 @@ def main():
     parser.add_argument("--port", type=int, default=80)
     args = parser.parse_args()
     app = create_app()
+    app.config["UPDATE_AUTOCHECK"] = True
     try:
         from waitress import serve
         # Share uploads can be big; waitress spools bodies to $TMPDIR (the unit

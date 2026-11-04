@@ -1,6 +1,7 @@
 {% extends "base.html" %}{% block body %}
-<div class="card"><h1>Flashing <span class="muted mono">{{ job }}</span></h1>
-<p id="status" class="muted">Running… don't power off the Amiga or the Pi.</p>
+{% set is_update = job.startswith("update-") %}
+<div class="card"><h1>{{ "Updating the Pi software" if is_update else "Flashing" }} <span class="muted mono">{{ job }}</span></h1>
+<p id="status" class="muted">Running… don't power off the Amiga or the Pi.{% if is_update %} This page reloads itself when the web service restarts during the update.{% endif %}</p>
 <pre class="log" id="log"></pre>
 <p><a href="/">Back to status</a></p></div>
 <script>
@@ -18,7 +19,7 @@ async function poll() {
       statusEl.textContent = (d.result.ok ? "Finished: " : "Failed: ") + d.result.result;
       return;
     }
-    if (d.status === "stopped") { statusEl.className = "bad"; statusEl.textContent = "The flash process stopped without a result. Check the log."; return; }
+    if (d.status === "stopped") { statusEl.className = "bad"; statusEl.textContent = "The process stopped without a result. Check the log."; return; }
   } catch (e) { statusEl.textContent = "Lost contact with the Pi, retrying…"; }
   setTimeout(poll, 1000);
 }
