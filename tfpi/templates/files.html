@@ -1,0 +1,140 @@
+{% extends "base.html" %}{% block title %}Files · TF Pi{% endblock %}{% block body %}
+{% macro human(n) %}{% if n < 1024 %}{{ n }} B{% elif n < 1048576 %}{{ (n / 1024) | round(1) }} KB{% elif n < 1073741824 %}{{ (n / 1048576) | round(1) }} MB{% else %}{{ (n / 1073741824) | round(2) }} GB{% endif %}{% endmacro %}
+<style>
+#drop { border:2px dashed var(--line); border-radius:8px; padding:18px; text-align:center; margin:12px 0; }
+#drop.over { border-color:var(--accent); background:color-mix(in srgb, var(--accent) 8%, transparent); }
+.crumbs a { color:var(--accent); text-decoration:none; }
+table.files td { border-bottom:1px solid var(--line); padding:6px 8px 6px 0; }
+table.files a { color:var(--fg); text-decoration:none; } table.files a:hover { text-decoration:underline; }
+.size,.date { white-space:nowrap; color:var(--muted); font-size:13px; }
+.actions { white-space:nowrap; text-align:right; } .actions button { padding:4px 9px; font-size:13px; }
+#queue div { display:flex; gap:10px; align-items:center; font-size:13px; padding:3px 0; }
+#queue .name { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#queue progress { width:120px; }
+@media (max-width:600px) { .date { display:none; } }
+</style>
+
+<div class="card">
+<h1 class="crumbs"><a href="/files">{{ share.volume }}:</a>{% for name, path in crumbs %}<a href="/files?path={{ path | urlencode }}">{{ name }}</a>{% if not loop.last %}/{% endif %}{% endfor %}</h1>
+<p class="muted">PI0: on the Amiga · <span class="mono">{{ share.root }}</span> · {{ human(free) }} free</p>
+
+<div id="drop">Drop files or folders here<br>
+<label class="button" style="display:inline-block;margin-top:8px">Choose files<input id="pick" type="file" multiple hidden></label>
+<label class="button" style="display:inline-block;margin-top:8px;margin-left:6px">Choose a folder<input id="pickdir" type="file" webkitdirectory hidden></label>
+</div>
+<div id="queue"></div>
+
+<table class="files">
+{% if crumbs %}<tr><td colspan="4"><a href="/files{% if crumbs | length > 1 %}?path={{ crumbs[-2][1] | urlencode }}{% endif %}">⬆ Parent folder</a></td></tr>{% endif %}
+{% for e in entries %}{% set path = (folder ~ "/" ~ e.name) if folder else e.name %}
+<tr>
+<td>{% if e.is_dir %}📁 <a href="/files?path={{ path | urlencode }}"><b>{{ e.name }}</b></a>{% else %}<a href="/files/download?path={{ path | urlencode }}" title="Download">{{ e.name }}</a>{% endif %}
+{% if e.long_name %} <span class="warn" title="Longer than {{ name_max }} characters: some Amiga programs won't show or open it">long name</span>{% endif %}</td>
+<td class="size">{% if not e.is_dir %}{{ human(e.size) }}{% endif %}</td>
+<td class="date" data-t="{{ e.mtime | int }}"></td>
+<td class="actions">
+<form class="inline" method="post" action="/files/rename" onsubmit="return askName(this, {{ e.name | tojson | forceescape }})"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="folder" value="{{ folder }}"><input type="hidden" name="path" value="{{ path }}"><input type="hidden" name="name"><button class="secondary">Rename</button></form>
+<form class="inline" method="post" action="/files/delete" onsubmit="return confirm({{ ('Delete the folder ' ~ e.name ~ ' and everything in it?' if e.is_dir else 'Delete ' ~ e.name ~ '?') | tojson | forceescape }})"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="folder" value="{{ folder }}"><input type="hidden" name="path" value="{{ path }}"><button class="secondary">Delete</button></form>
+</td></tr>
+{% else %}<tr><td colspan="4" class="muted">This folder is empty.</td></tr>{% endfor %}
+</table>
+
+<form method="post" action="/files/mkdir" style="margin-top:14px" onsubmit="return askName(this, '')">
+<input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="folder" value="{{ folder }}"><input type="hidden" name="name">
+<button class="secondary">New folder</button></form>
+</div>
+
+<script>
+const CSRF = {{ csrf | tojson }}, FOLDER = {{ folder | tojson }};
+const JUNK = n => n === ".DS_Store" || n === "Thumbs.db" || n === "desktop.ini" || n.startsWith("._");
+
+for (const cell of document.querySelectorAll("td.date"))
+  cell.textContent = new Date(cell.dataset.t * 1000).toLocaleString([], {dateStyle: "medium", timeStyle: "short"});
+
+function askName(form, current) {
+  const name = prompt(current ? "New name" : "Folder name", current);
+  if (!name || name === current) return false;
+  form.querySelector("input[name=name]").value = name;
+  return true;
+}
+
+// Each upload is a PUT of the raw file: the Pi writes it straight to the card.
+function put(file, rel, overwrite, row) {
+  return new Promise(resolve => {
+    const xhr = new XMLHttpRequest();
+    const q = new URLSearchParams({dir: FOLDER, name: rel});
+    if (overwrite) q.set("overwrite", "1");
+    xhr.open("PUT", "/files/upload?" + q);
+    xhr.setRequestHeader("X-CSRF", CSRF);
+    xhr.setRequestHeader("Content-Type", "application/octet-stream");
+    xhr.upload.onprogress = e => { if (e.lengthComputable) row.bar.value = e.loaded / e.total; };
+    xhr.upload.onload = () => { row.state.textContent = "writing…"; };
+    xhr.onload = () => {
+      let reply = {};
+      try { reply = JSON.parse(xhr.responseText); } catch (e) {}
+      resolve({status: xhr.status, reply});
+    };
+    xhr.onerror = () => resolve({status: 0, reply: {error: "connection lost"}});
+    xhr.send(file);
+  });
+}
+
+function addRow(rel) {
+  const div = document.createElement("div");
+  div.innerHTML = '<span class="name"></span><progress max="1" value="0"></progress><span class="state muted">waiting</span>';
+  div.querySelector(".name").textContent = rel;
+  document.getElementById("queue").append(div);
+  return {bar: div.querySelector("progress"), state: div.querySelector(".state")};
+}
+
+async function upload(items) {
+  items = items.filter(i => !i.rel.split("/").some(JUNK));
+  if (!items.length) return;
+  const rows = items.map(i => addRow(i.rel));
+  let failed = 0, overwriteAll = null;
+  for (const [n, item] of items.entries()) {
+    const row = rows[n];
+    row.state.textContent = "uploading";
+    let {status, reply} = await put(item.file, item.rel, false, row);
+    if (status === 409 && reply.exists) {
+      if (overwriteAll === null) {
+        const yes = confirm(`${item.rel} already exists. Replace it?` + (items.length > 1 ? "\n(Your answer applies to the other files in this upload too.)" : ""));
+        overwriteAll = yes;
+      }
+      if (overwriteAll) ({status, reply} = await put(item.file, item.rel, true, row));
+    }
+    if (status === 200) { row.bar.value = 1; row.state.textContent = "done"; row.state.className = "state ok"; }
+    else { failed++; row.state.textContent = reply.error || ("failed (" + status + ")"); row.state.className = "state bad"; }
+  }
+  if (!failed) setTimeout(() => location.reload(), 600);
+  else { const again = document.createElement("button"); again.className = "secondary"; again.textContent = "Refresh list"; again.onclick = () => location.reload(); document.getElementById("queue").append(again); }
+}
+
+// Folders dropped in: walk them (readEntries returns batches, so loop).
+function readAll(reader) {
+  return new Promise(resolve => {
+    const all = [];
+    const next = () => reader.readEntries(batch => { if (!batch.length) resolve(all); else { all.push(...batch); next(); } }, () => resolve(all));
+    next();
+  });
+}
+async function walk(entry, prefix, out) {
+  if (entry.isFile) out.push({file: await new Promise(r => entry.file(r, () => r(null))), rel: prefix + entry.name});
+  else if (entry.isDirectory) for (const child of await readAll(entry.createReader())) await walk(child, prefix + entry.name + "/", out);
+}
+
+const drop = document.getElementById("drop");
+for (const ev of ["dragenter", "dragover"]) drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("over"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+drop.addEventListener("drop", async e => {
+  e.preventDefault(); drop.classList.remove("over");
+  const entries = [...e.dataTransfer.items].map(i => i.webkitGetAsEntry && i.webkitGetAsEntry()).filter(Boolean);
+  let items = [];
+  if (entries.length) for (const entry of entries) await walk(entry, "", items);
+  else items = [...e.dataTransfer.files].map(f => ({file: f, rel: f.name}));
+  upload(items.filter(i => i.file));
+});
+document.getElementById("pick").onchange = e => upload([...e.target.files].map(f => ({file: f, rel: f.name})));
+document.getElementById("pickdir").onchange = e => upload([...e.target.files].map(f => ({file: f, rel: f.webkitRelativePath || f.name})));
+</script>
+{% endblock %}

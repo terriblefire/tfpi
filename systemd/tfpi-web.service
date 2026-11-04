@@ -5,6 +5,8 @@ After=network-online.target
 
 [Service]
 Environment=PYTHONPATH=/opt/tfpi/lib
+# Upload spool: /tmp is RAM on Trixie, too small for big share uploads.
+Environment=TMPDIR=/var/tmp
 WorkingDirectory=/opt/tfpi/lib
 ExecStart=/usr/bin/python3 -m tfpi.web --port 80
 Restart=on-failure

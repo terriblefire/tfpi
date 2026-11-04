@@ -82,6 +82,24 @@ SPI ROM editor. A full-image release zip has a **Customise SPI ROM** button on i
 - **Build firmware** makes a normal firmware zip (flash image + README of the changes),
   with the bitstream built from the SDK by icebram/icepack, and opens the review page.
 
+## Files on PI0: (the a314fs share)
+
+The **Files** tab shows the folder the Amiga mounts as `PI0:` (`~/a314shared`,
+from `/etc/opt/a314/a314fs.conf`), behind the same password. Drop files or
+whole folders on the page to upload; click a file to download it; rename,
+delete and make folders from the list.
+
+- Uploads go to a hidden temporary file and appear only once complete and
+  synced to the card, so the Amiga never sees half a file and a power cut
+  can't leave a truncated one.
+- Names work like on the Amiga: case doesn't matter (uploading `README` over
+  `ReadMe` asks to replace it), `:` and `/` aren't allowed, and characters
+  outside Latin-1 are refused. Names longer than 30 characters are allowed
+  but marked, since some Amiga programs can't open them.
+- Finder/Explorer clutter (`.DS_Store`, `._*`, `Thumbs.db`) is skipped.
+- a314fs keeps protection bits and comments in `<name>:a314` files; these are
+  hidden here and follow their file when it is renamed or deleted.
+
 ## Command line
 
 ```

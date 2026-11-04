@@ -11,6 +11,7 @@
 body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif; }
 header { display:flex; justify-content:space-between; align-items:center; padding:12px 16px; border-bottom:1px solid var(--line); }
 header a { color:var(--fg); text-decoration:none; font-weight:600; }
+header a.tab { font-weight:400; margin-left:18px; color:var(--accent); }
 main { max-width:860px; margin:0 auto; padding:16px; }
 .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:16px; margin-bottom:16px; }
 h1 { font-size:20px; margin:0 0 12px; } h2 { font-size:16px; margin:0 0 10px; }
@@ -31,7 +32,7 @@ form.inline { display:inline; }
 </style>
 </head>
 <body>
-<header><a href="/">TF Pi{% if board %} · {{ board }}{% endif %}</a>
+<header><nav><a href="/">TF Pi{% if board %} · {{ board }}{% endif %}</a>{% if session.user %}<a class="tab" href="/files">Files</a>{% endif %}</nav>
 {% if session.user %}<form class="inline" method="post" action="/logout"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary">Log out</button></form>{% endif %}
 </header>
 <main>

@@ -16,16 +16,17 @@ from functools import wraps
 from pathlib import Path
 
 from flask import (Flask, abort, flash, jsonify, redirect, render_template, request,
-                   session, url_for)
+                   send_file, session, url_for)
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 
 from . import config
-from . import custom, sdk
+from . import custom, files, sdk
 from .flasher import plan
 from .fwimage import FirmwareError, load_release
 
 TOKEN_CHARS = set("0123456789abcdef")
+FORM_MAX = 8 * 1024 * 1024            # everything except share uploads
 
 
 def secure_amiga_name(filename):
@@ -107,7 +108,6 @@ def job_status(job):
 def create_app():
     app = Flask(__name__)
     app.config["SECRET_KEY"] = web_conf()["secret_key"]
-    app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024
     app.config["SESSION_COOKIE_SAMESITE"] = "Strict"
 
     def login_required(view):
@@ -121,9 +121,19 @@ def create_app():
         return wrapper
 
     @app.before_request
+    def size_limit():
+        # Share uploads stream straight to disk and may be large; nothing else may.
+        if request.endpoint != "files_upload" and (request.content_length or 0) > FORM_MAX:
+            abort(413)
+
+    @app.before_request
     def csrf_protect():
         session.setdefault("csrf", secrets.token_hex(16))
-        if request.method == "POST":
+        if request.method == "PUT":
+            sent = request.headers.get("X-CSRF")
+            if not sent or not secrets.compare_digest(sent, session["csrf"]):
+                abort(400, "bad or missing CSRF token, reload the page")
+        elif request.method == "POST":
             sent = request.form.get("csrf") or request.headers.get("X-CSRF")
             if not sent or not secrets.compare_digest(sent, session["csrf"]):
                 abort(400, "bad or missing CSRF token, reload the page")
@@ -411,6 +421,105 @@ def create_app():
         return jsonify(text=chunk.decode("utf-8", "replace"), offset=offset + len(chunk),
                        status=status, result=result)
 
+    # --- the a314fs share -----------------------------------------------------------
+
+    def the_share():
+        found = files.share()
+        if found is None:
+            flash("The a314fs share isn't set up on this Pi (no /etc/opt/a314/a314fs.conf "
+                  "or its folder is missing).", "error")
+        return found
+
+    def back_to(folder):
+        return redirect(url_for("files_page", path=folder or None))
+
+    @app.get("/files")
+    @login_required
+    def files_page():
+        found = the_share()
+        if found is None:
+            return redirect(url_for("index"))
+        folder = request.args.get("path", "")
+        try:
+            directory = files.resolve(found, folder)
+            if not directory.is_dir():
+                raise files.FilesError(f"{folder} is not a folder")
+            entries = files.listing(directory)
+        except (files.FilesError, OSError) as error:
+            flash(str(error), "error")
+            return back_to("")
+        folder = files.relative(found, directory)
+        crumbs, so_far = [], []
+        for part in folder.split("/") if folder else []:
+            so_far.append(part)
+            crumbs.append((part, "/".join(so_far)))
+        return render_template("files.html", share=found, folder=folder, crumbs=crumbs,
+                               entries=entries, free=files.free_bytes(found),
+                               name_max=files.AMIGA_NAME_MAX)
+
+    @app.get("/files/download")
+    @login_required
+    def files_download():
+        found = the_share()
+        if found is None:
+            abort(404)
+        try:
+            path = files.resolve(found, request.args.get("path", ""))
+        except files.FilesError:
+            abort(404)
+        if not path.is_file():
+            abort(404)
+        return send_file(path, as_attachment=True, download_name=path.name, max_age=0)
+
+    @app.put("/files/upload")
+    @login_required
+    def files_upload():
+        found = files.share()
+        if found is None:
+            return jsonify(error="the a314fs share isn't set up on this Pi"), 404
+        try:
+            saved = files.save(found, request.args.get("dir", ""), request.args.get("name", ""),
+                               request.stream, request.content_length,
+                               overwrite=request.args.get("overwrite") == "1")
+        except FileExistsError as error:
+            return jsonify(error=f"{error} already exists", exists=True), 409
+        except (files.FilesError, OSError) as error:
+            return jsonify(error=str(error)), 400
+        return jsonify(saved=saved)
+
+    def files_action(action):
+        folder = request.form.get("folder", "")
+        found = the_share()
+        if found is None:
+            return redirect(url_for("index"))
+        try:
+            message = action(found)
+            if message:
+                flash(message, "ok")
+        except (files.FilesError, OSError) as error:
+            flash(str(error), "error")
+        return back_to(folder)
+
+    @app.post("/files/mkdir")
+    @login_required
+    def files_mkdir():
+        return files_action(lambda s: files.mkdir(s, request.form.get("folder", ""),
+                                                  request.form.get("name", "").strip()))
+
+    @app.post("/files/rename")
+    @login_required
+    def files_rename():
+        return files_action(lambda s: files.rename(s, request.form.get("path", ""),
+                                                   request.form.get("name", "").strip()))
+
+    @app.post("/files/delete")
+    @login_required
+    def files_delete():
+        def delete(s):
+            files.delete(s, request.form.get("path", ""))
+            return f"Deleted {request.form.get('path', '').rsplit('/', 1)[-1]}."
+        return files_action(delete)
+
     return app
 
 
@@ -430,7 +539,10 @@ def main():
     app = create_app()
     try:
         from waitress import serve
-        serve(app, listen=f"{args.host}:{args.port}", threads=4)
+        # Share uploads can be big; waitress spools bodies to $TMPDIR (the unit
+        # sets /var/tmp, since /tmp is RAM on Trixie).
+        serve(app, listen=f"{args.host}:{args.port}", threads=4,
+              max_request_body_size=4 * 1024 ** 3)
     except ImportError:
         app.run(host="::" if args.host == "*" else args.host, port=args.port, threaded=True)
 
