@@ -4,6 +4,8 @@ Sets up a Raspberry Pi to drive a TerribleFire TF4060: A314 daemon (TF build),
 `fomu-flash` for the RAM FPGA's SPI flash, `xc3sprog` for the BUS CPLD, and a
 small web page to deploy firmware releases.
 
+Support: [Discord](https://discord.gg/4B8743Fm4w)
+
 ## Set up a Pi
 
 1. In **Raspberry Pi Imager**, write **Raspberry Pi OS Lite** to the SD card.
