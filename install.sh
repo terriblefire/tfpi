@@ -166,9 +166,10 @@ fi
 
 # --- tfpi web page + flasher ------------------------------------------------
 install -d "$PREFIX/lib"
-rm -rf "$PREFIX/lib/tfpi"
+rm -rf "$PREFIX/lib/tfpi" "$PREFIX/lib/tfdiag"
 cp -r "$self_dir/tfpi" "$PREFIX/lib/tfpi"
-find "$PREFIX/lib/tfpi" -name __pycache__ -prune -exec rm -rf {} +
+cp -r "$self_dir/tfdiag" "$PREFIX/lib/tfdiag"     # Diagnostics tab (python3 -m tfdiag)
+find "$PREFIX/lib/tfpi" "$PREFIX/lib/tfdiag" -name __pycache__ -prune -exec rm -rf {} +
 install -m755 "$self_dir/share/setgpio.sh" "$PREFIX/setgpio.sh"
 for tool in tfpi-flash tfpi-update; do
 	install -m755 "$self_dir/bin/$tool" "/usr/local/bin/$tool"
@@ -197,6 +198,19 @@ mv "$PREFIX/versions.json.new" "$PREFIX/versions.json"
 systemctl daemon-reload
 systemctl enable tfpi-web.service
 systemctl restart tfpi-web.service
+
+# --- Diagnostics tab: openocd (CPLD JTAG) + power-loss recovery unit ---------
+# tfdiag and the diagnostic images (tfpi/diag_images) were copied with tfpi
+# above; /opt/tfpi/diag is tfdiag's default image folder for command-line use.
+[ -e "$PREFIX/diag" ] && [ ! -L "$PREFIX/diag" ] || ln -sfn "$PREFIX/lib/tfpi/diag_images" "$PREFIX/diag"
+diag_pkgs=openocd
+apt-cache show python3-spidev >/dev/null 2>&1 && diag_pkgs="$diag_pkgs python3-spidev"
+# shellcheck disable=SC2086
+apt-get install -y --no-install-recommends $diag_pkgs \
+	|| echo "WARNING: could not install $diag_pkgs; the Diagnostics board test needs openocd"
+install -m644 "$self_dir/systemd/tfpi-diag-recover.service" /etc/systemd/system/tfpi-diag-recover.service
+systemctl daemon-reload
+systemctl enable tfpi-diag-recover.service
 
 # --- Done -------------------------------------------------------------------
 sync    # the Pi may lose power with the Amiga at any time

@@ -1,0 +1,45 @@
+{% extends "base.html" %}{% block title %}Diagnostic result · TF Pi{% endblock %}{% block body %}
+<div class="card"><h1>Diagnostic capture <span class="muted mono">{{ job }}</span></h1>
+{% if running %}<p class="warn">This test is still running. <a href="/job/{{ job }}">Watch it</a>.</p>
+{% elif not outcome %}<p class="warn">No result recorded for this run.</p>
+{% else %}
+{% if outcome.interrupted %}<p class="warn">This capture was interrupted (power loss or a stopped process). The zip holds what was captured.</p>
+{% elif outcome.complete %}<p><b>{{ done_message }}.</b></p>
+{% else %}<p class="warn"><b>Capture {{ "stopped early" if outcome.aborted else "incomplete" }}</b>: part of it could not be captured. Download the zip and send it to us anyway.</p>{% endif %}
+{% if outcome.restored %}<p class="ok"><b>Restored: OK</b></p>
+{% else %}<div class="banner-bad"><b>Restored: NOT OK</b>
+{% if outcome.restore and outcome.restore.differences %}<ul>{% for d in outcome.restore.differences %}<li>{{ d }}</li>{% endfor %}</ul>{% endif %}
+{% if outcome.restore and outcome.restore.advice %}<p>{{ outcome.restore.advice }}</p>{% endif %}
+<p><b>What to do:</b> {{ what_to_do }}</p></div>{% endif %}
+<table>
+<tr><th>Started</th><td>{{ run.started or "-" }}</td></tr>
+{% if run.images_build %}<tr><th>Diagnostic images</th><td class="mono">build {{ run.images_build }}</td></tr>{% endif %}
+{% for step, value in outcome.steps.items() %}
+<tr><th>{{ names.get(step, step) }}</th><td>{{ value.state }}{% if value.findings %} · {{ value.findings }} finding{{ "s" if value.findings != 1 }} noted (see the report below){% endif %}</td></tr>
+{% endfor %}
+</table>
+{% if "board" in outcome.steps %}<p class="warn">After a board test, power-cycle the Amiga before you use it.</p>{% endif %}
+<p class="muted">The FPGA reload restarts the Amiga. If it doesn't start booting within a few seconds, press reset or power-cycle it.</p>
+{% endif %}
+</div>
+
+{% include "diag_summary.html" %}
+{% if report %}<div class="card"><h2>Report</h2>
+<p><a href="/diag/result/{{ job }}/file/report.html" target="_blank" rel="noopener">Open the report in a new tab</a></p>
+<iframe src="/diag/result/{{ job }}/file/report.html" sandbox="allow-scripts" title="Diagnostics report"
+ style="width:100%;height:75vh;border:1px solid var(--line);border-radius:6px;background:#fff"></iframe>
+</div>{% endif %}
+{% if waves %}<div class="card"><h2>Waveforms</h2><ul>
+{% for w in waves %}<li><a class="mono" href="/diag/result/{{ job }}/file/{{ w }}" target="_blank" rel="noopener">{{ w.rsplit("/", 1)[-1] }}</a></li>{% endfor %}
+</ul><p class="muted">The .vcd files in the zip open in GTKWave or PulseView.</p></div>{% endif %}
+{% if zip_name %}<div class="card"><h2>Download</h2>
+<p class="mono">{{ zip_name }}</p>
+<p class="muted">IP addresses and host names are removed. Contents:</p>
+<table>{% for name, size in contents %}<tr><td class="mono">{{ name }}</td><td style="width:8em" class="muted">{{ "{:,}".format(size) }} bytes</td></tr>{% endfor %}</table>
+{% if not running %}<form method="post" action="/diag/result/{{ job }}/contact" style="margin-top:12px"><input type="hidden" name="csrf" value="{{ csrf }}">
+{% include "contact_fields.html" %}
+<button class="secondary">Save in the zip</button></form>{% endif %}
+<p style="margin-top:12px"><a class="button" href="/diag/result/{{ job }}/download">Download {{ zip_name }}</a></p>
+</div>{% endif %}
+<p><a href="/diag">Back to Diagnostics</a></p>
+{% endblock %}

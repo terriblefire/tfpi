@@ -1,0 +1,40 @@
+{# Bus cycles, waveforms, board findings and clocks from the run's files: measurements only. #}
+{% macro ns(m) %}{% if m %}<b>{{ m.median }} ns</b> <span class="muted">({{ m.min }}..{{ ">=" if m.open }}{{ m.max }}, n={{ "{:,}".format(m.n) }})</span>{% else %}<span class="muted">-</span>{% endif %}{% endmacro %}
+{% set bus = summary.bus %}
+{% if bus %}<div class="card"><h2>Bus cycles</h2>
+<p class="muted">How the Amiga's chips answered the 68060's bus cycles, per region and CPU clock preset: median and range (histogram bin edges) with the number of samples. Measurements only, nothing is judged good or bad here.</p>
+<div style="overflow-x:auto"><table class="bus">
+<tr><th style="width:auto">Region</th>{% for c in bus.columns %}<th style="width:auto">p{{ c.preset }} · {{ c.name }}{% if c.fabric_mhz %}<br><span class="muted">fabric {{ "%.2f" | format(c.fabric_mhz) }} MHz</span>{% endif %}</th>{% endfor %}</tr>
+{% for r in bus.rows %}<tr><td><b>{{ r.title }}</b><br><span class="muted">{{ r.chips }}</span></td>
+{% for cell in r.cells %}<td>{% if not cell.seen %}<span class="muted">not seen</span>{% else %}
+{{ "{:,}".format(cell.cycles) }} cycles{% if cell.held %} <span class="muted">(held)</span>{% endif %}
+{% for m in cell.meas %}{% if m %}<br><span class="muted">{{ m.label }}:</span> {{ ns(m) }}{% endif %}{% endfor %}
+{% endif %}</td>{% endfor %}</tr>{% endfor %}
+</table></div></div>
+{% elif summary.bus_error %}<div class="card"><h2>Bus cycles</h2><p class="muted">Couldn't read the timing results ({{ summary.bus_error }}); the report and the zip have what was captured.</p></div>{% endif %}
+
+{% if summary.waves %}<div class="card"><h2>Waveforms per region</h2>
+{% for reg, caps in summary.waves.items() %}<div class="wave" style="margin-bottom:16px">
+<h3 style="font-size:15px;margin:0 0 6px">{{ region_titles.get(reg, reg) }}
+{% if caps | length > 1 %}<select data-wave="{{ loop.index }}" style="font:inherit;margin-left:8px">{% for c in caps %}<option value="/diag/result/{{ job }}/file/{{ c.svg }}">p{{ c.preset }}{% if c.trigger %} · {{ c.trigger }}{% endif %}</option>{% endfor %}</select>
+{% else %}<span class="muted" style="font-weight:400">p{{ caps[0].preset }}{% if caps[0].trigger %} · {{ caps[0].trigger }}{% endif %}</span>{% endif %}</h3>
+<div style="overflow-x:auto"><img id="wave-{{ loop.index }}" src="/diag/result/{{ job }}/file/{{ caps[0].svg }}" alt="waveform, {{ region_titles.get(reg, reg) }}" style="max-width:none;display:block"></div>
+</div>{% endfor %}
+<script>for (const s of document.querySelectorAll("select[data-wave]")) s.onchange = () => { document.getElementById("wave-" + s.dataset.wave).src = s.value; };</script>
+</div>{% endif %}
+
+{% set fs = summary.findings %}
+{% if fs and (fs.count or "board" in (outcome.steps if outcome else {})) %}<div class="card"><h2>Board test findings</h2>
+{% if fs.count %}<p>{{ fs.count }} finding{{ "s" if fs.count != 1 }} noted{% if fs.count > fs.first | length %}; the first {{ fs.first | length }}{% endif %}:</p>
+<ul>{% for f in fs.first %}<li><b>{{ f.title }}</b>{% if f.detail %}: {{ f.detail }}{% endif %}{% if f.where %} <span class="muted">({{ f.where }})</span>{% endif %}</li>{% endfor %}</ul>
+{% else %}<p>No findings noted.</p>{% endif %}
+{% if report %}<p><a href="/diag/result/{{ job }}/file/report.html" target="_blank" rel="noopener">See the board view in the report</a></p>{% endif %}
+</div>{% endif %}
+
+{% set ck = summary.clocks %}
+{% if ck %}<div class="card"><h2>Clocks</h2>
+{% if ck.clocks %}<table>{% for c in ck.clocks %}<tr><th>{{ c.name }}</th><td>{% if c.mhz is defined and c.mhz is not none %}{{ c.mhz }} MHz{% elif c.ratio is defined %}{{ c.ratio }}{% else %}-{% endif %}{% if c.nominal %} <span class="muted">(nominal {{ c.nominal }})</span>{% endif %}{% if c.msg %}<br><span class="muted">{{ c.msg }}</span>{% endif %}</td></tr>{% endfor %}</table>{% endif %}
+{% if ck.fabric %}<p><span class="muted">Fabric clock measured while each preset ran:</span> {% for p, mhz in ck.fabric.items() %}p{{ p }} {{ "%.2f" | format(mhz) }} MHz{% if not loop.last %} · {% endif %}{% endfor %}</p>{% endif %}
+{% if ck.switches %}<table><tr><th>Clock switch</th><th style="width:auto">Polls</th><th style="width:auto">Bus errors</th><th style="width:auto">Acked</th></tr>
+{% for s in ck.switches %}<tr><td>p{{ s.preset }}</td><td>{{ s.polls if s.polls is not none else ("did not settle" if not s.settled else "-") }}</td><td>{{ s.bus_errors if s.bus_errors is not none else "-" }}</td><td>{{ "yes" if s.acked else "no" }}</td></tr>{% endfor %}</table>{% endif %}
+</div>{% endif %}

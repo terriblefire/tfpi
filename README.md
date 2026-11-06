@@ -65,6 +65,35 @@ set in `/etc/tfpi/tfpi.conf` (`BOARD=tf4060r5`).
 
 The page is meant for your home network only. Don't forward it to the internet.
 
+## Diagnostics
+
+The **Diagnostics** tab captures how the board and the Amiga behave, for us to
+look at: a **board test** (CPLD JTAG chain, pin snapshot, clocks, CPLD↔FPGA
+lines, SDRAM), a **timing capture** (bus timing histograms and waveforms while
+the 68060 exercises the Amiga, over the chosen CPU clock presets), or both
+(**Run all**), then it always restores and checks the machine. Nothing is
+judged good or bad on the Pi: at the end, download the zip and send it to us.
+The one real check is the restore: **Restored: OK**, or in red what differs and
+what to do.
+
+- Nothing is written to the FPGA or CPLD flash: the diagnostic images are loaded
+  into the FPGA's SRAM, and a power cycle always brings the normal firmware back.
+- The tests reset the Amiga, and the first step (stopping a314d and reading the
+  FPGA flash with the FPGA held in reset) crashes it. Save your work first, and
+  don't power off during a test.
+- The `tfdiag` tool (`tfdiag/`) and the diagnostic images (`tfpi/diag_images/`,
+  with `diag_manifest.json`) are part of tfpi and install with it.
+- One job at a time: no flash or update can start during a test, and no test
+  during a flash or update.
+- The result page lists what is in the download (`tf4060-diag-<serial>-<date>.zip`,
+  with IP addresses and host names removed) before you download it. You can add
+  a Discord/forum handle and a note on what's wrong; they go only into the zip,
+  as `contact.txt`.
+- If the power goes during a test, `tfpi-diag-recover.service` restores and
+  checks the board at the next boot (before a314d and the page start), and the
+  page shows the outcome. Partial results stay downloadable.
+- Command line: `sudo PYTHONPATH=/opt/tfpi/lib python3 -m tfdiag --help`.
+
 ## Customise the SPI ROM (SSBL and ROMFS)
 
 Upload an **SDK zip** (`tf4060r5_..._SDK.zip`) instead of a release and the page opens the
@@ -137,6 +166,9 @@ Pinned in [`sources.conf`](sources.conf):
 - vasm 2.0d and vlink 0.18a built from source (SHA-256 pinned), `fpga-icestorm` from apt:
   used by the SPI ROM editor
 - this repo → `/opt/tfpi`, web page as `tfpi-web.service` on port 80
+- `tfdiag` → `/opt/tfpi/lib/tfdiag`, `openocd` and `python3-spidev` from apt for the
+  Diagnostics tab, and `tfpi-diag-recover.service` (power-loss recovery, runs only
+  after an interrupted test)
 
 `fomu-flash` drives the BCM GPIO block directly, so a Pi 5 is not supported.
 
@@ -147,5 +179,7 @@ python3 -m venv .venv && .venv/bin/pip install flask
 .venv/bin/python -m unittest discover -s tests
 ```
 
-The tests use stub `fomu-flash`, `xc3sprog`, `pinctrl` and `systemctl`. If
+This also runs tfdiag's own tests (`tfdiag/tests`, a fake board).
+
+The tests use stub `fomu-flash`, `xc3sprog`, `pinctrl`, `systemctl` and `tfdiag`. If
 `../tf4060/boards/tf4060r5` exists, the real release zips are checked too.

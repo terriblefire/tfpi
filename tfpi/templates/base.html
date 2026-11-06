@@ -31,10 +31,16 @@ form.inline { display:inline; }
 .update ul.changes { margin:0 0 8px; padding-left:20px; font-size:13px; }
 .meter { height:10px; background:var(--line); border-radius:5px; overflow:hidden; margin:8px 0; }
 .meter div { height:100%; background:var(--accent); } .meter div.bad { background:var(--bad); }
+.warning { border:1px solid var(--warn); border-left-width:4px; border-radius:6px; padding:10px 12px; margin-bottom:16px; }
+.warning p { margin:0; } .warning p + p { margin-top:6px; font-weight:600; }
+.banner-bad { border:1px solid var(--bad); border-left-width:4px; border-radius:6px; padding:10px 12px; margin-bottom:16px; color:var(--bad); }
+.banner-ok { border:1px solid var(--ok); border-left-width:4px; border-radius:6px; padding:10px 12px; margin-bottom:16px; }
+fieldset { border:1px solid var(--line); border-radius:6px; margin:0 0 12px; } legend { color:var(--muted); }
+.choices label { display:inline-block; min-width:12em; font-size:14px; }
 </style>
 </head>
 <body>
-<header><nav><a href="/">TF Pi{% if board %} · {{ board }}{% endif %}</a>{% if session.user %}<a class="tab" href="/files">Files</a>{% endif %}</nav>
+<header><nav><a href="/">TF Pi{% if board %} · {{ board }}{% endif %}</a>{% if session.user %}<a class="tab" href="/files">Files</a><a class="tab" href="/diag">Diagnostics</a>{% endif %}</nav>
 {% if session.user %}<form class="inline" method="post" action="/logout"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary">Log out</button></form>{% endif %}
 </header>
 <main>

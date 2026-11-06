@@ -1,0 +1,18 @@
+{% extends "base.html" %}{% block title %}Start diagnostics · TF Pi{% endblock %}{% block body %}
+{% include "diag_warning.html" %}
+<div class="card"><h1>Start {{ "all tests" if what == "all" else names[actions[0]] | lower }}?</h1>
+<p class="warn">{{ first_step }}</p>
+<table>
+<tr><th>Runs</th><td>{% for a in actions %}{{ names[a] }}{% if not loop.last %}, then {% endif %}{% endfor %}, then restore and check</td></tr>
+{% if build %}<tr><th>Diagnostic images</th><td class="mono">build {{ build }}</td></tr>{% endif %}
+{% if "timing" in actions %}<tr><th>Clock presets</th><td>{% if presets %}{% for p in presets %}{{ preset_names.get(p, p) }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}all{% endif %}</td></tr>
+<tr><th>Tests</th><td class="mono">{{ "all" if mask is none else "0x%08x" % mask }}</td></tr>{% endif %}
+</table>
+<form method="post" action="/diag/run" style="margin-top:12px"><input type="hidden" name="csrf" value="{{ csrf }}">
+<input type="hidden" name="action" value="{{ what }}">
+{% for p in presets or [] %}<input type="hidden" name="preset" value="{{ p }}">{% endfor %}
+{% if mask is not none %}<input type="hidden" name="tests" value="0x{{ '%08x' % mask }}">{% endif %}
+{% include "contact_fields.html" %}
+<button>Start</button> <a href="/diag" style="margin-left:12px">Cancel</a>
+</form></div>
+{% endblock %}
