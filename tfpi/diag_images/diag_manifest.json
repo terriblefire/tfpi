@@ -1,0 +1,27 @@
+{
+ "images": {
+  "diag_timing.bin": "9ee10478f0610a80e83d394d6f2a830a5d7a069e41542ad3a8fa7a04a45fd617",
+  "diag_pins.bin": "8cb003f2964c597b4fb344bed4c9a20b6451a4145e2f5d0d49086d7bfcc6a1dd",
+  "diagex_body.bin": "d0f91e407d4b07d8d8b1dee41c5cbcbf89cf25a8b3becd9536acd1e6053bd8ca"
+ },
+ "build": "2948a9b8",
+ "spi_protocol": 1,
+ "cpld_usercodes": [
+  "0x74663430"
+ ],
+ "presets": [
+  0,
+  2,
+  3,
+  4,
+  5,
+  6,
+  7,
+  8,
+  9,
+  10,
+  11,
+  12
+ ],
+ "note": "v1: tf4060v2 2948a9b8 (PR #97), seed 10, post-route 101.52 MHz; presets with fabric clock <= 100 MHz only"
+}

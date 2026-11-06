@@ -68,6 +68,9 @@ def run(cmd, check=False):
 @contextmanager
 def flash_lock():
     config.STATE_DIR.mkdir(parents=True, exist_ok=True)
+    from . import diag
+    if diag.running():
+        raise FlashError("a diagnostic test is running")
     with open(config.LOCK_FILE, "w") as handle:
         try:
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)

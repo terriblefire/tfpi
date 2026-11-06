@@ -1,0 +1,38 @@
+{% extends "base.html" %}{% block title %}Diagnostics · TF Pi{% endblock %}{% block body %}
+{% include "diag_warning.html" %}
+{% include "diag_banner.html" %}
+{% if running_job %}<div class="flash">A diagnostic test is running. <a href="/job/{{ running_job }}">Watch it</a>.</div>{% endif %}
+{% if pending %}<div class="banner-bad"><b>A diagnostic test was interrupted and the machine has not been restored.</b>
+<p>Run the restore check now. If it keeps failing, power-cycle the Amiga (the Pi restarts with it), then reflash the firmware from the main page if needed.</p>
+<form class="inline" method="post" action="/diag/recover"><input type="hidden" name="csrf" value="{{ csrf }}"><button {% if busy %}disabled{% endif %}>Run the restore check</button></form>
+<form class="inline" method="post" action="/diag/forget" onsubmit="return confirm('Only do this after a power cycle or a reflash. Clear it?')"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary">I power-cycled / reflashed: clear this</button></form>
+</div>{% endif %}
+
+<div class="card"><h1>Diagnostics</h1>
+<p class="muted">A capture of how this board and your Amiga behave. Nothing is judged here: download the zip at the end and send it to us.</p>
+{% if status.ok %}<p class="muted">Diagnostic images{% if status.info.build %} build <span class="mono">{{ status.info.build }}</span>{% endif %}.</p>
+{% else %}<p class="bad">Tests can't run: {{ status.reason }}</p>{% endif %}
+
+<form method="post" action="/diag/start"><input type="hidden" name="csrf" value="{{ csrf }}">
+<fieldset><legend>Test</legend>
+<p><label><input type="radio" name="action" value="all" checked> <b>Run all</b>: board test, then timing capture, then restore and check</label><br>
+<label><input type="radio" name="action" value="board"> <b>Board test</b>: JTAG chain, pin snapshot, clocks, CPLD↔FPGA lines, SDRAM (no CPU needed)</label><br>
+<label><input type="radio" name="action" value="timing"> <b>Timing capture</b>: bus timing and waveforms while the 68060 exercises the Amiga</label></p>
+</fieldset>
+<fieldset><legend>Timing capture: CPU clock presets to sweep (all by default)</legend>
+<p class="choices">{% for p in presets %}<label><input type="checkbox" name="preset" value="{{ p.id }}" checked> {{ p.id }}: {{ p.name }}</label>{% endfor %}</p>
+</fieldset>
+<fieldset><legend>Timing capture: tests (all by default)</legend>
+<p class="choices">{% for t in tests %}<label><input type="checkbox" name="test" value="{{ t.bit }}" checked> {{ t.name }}</label>{% endfor %}</p>
+</fieldset>
+<button {% if busy or pending or not status.ok %}disabled{% endif %}>Start…</button>
+{% if busy %}<span class="warn">{{ busy }}</span>{% else %}<span class="muted">You confirm on the next page.</span>{% endif %}
+</form></div>
+
+{% if runs %}<div class="card"><h2>Results</h2><table>
+<tr><th>Run</th><th>Result</th><th style="width:1%"></th></tr>
+{% for r in runs %}<tr><td class="mono"><a href="/diag/result/{{ r.job }}">{{ r.job }}</a></td>
+<td>{{ r.outcome.result }}{% if r.outcome.restored is not none %}<br>{% if r.outcome.restored %}<span class="ok">Restored: OK</span>{% else %}<span class="bad">NOT restored</span>{% endif %}{% endif %}</td>
+<td>{% if r.zip %}<a href="/diag/result/{{ r.job }}">Download</a>{% endif %}</td></tr>{% endfor %}
+</table></div>{% endif %}
+{% endblock %}

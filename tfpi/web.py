@@ -8,6 +8,7 @@ import fcntl
 import os
 import secrets
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -21,7 +22,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 
 from . import config
-from . import custom, files, sdk, update
+from . import custom, diag, files, sdk, update
 from .flasher import plan
 from .fwimage import FirmwareError, load_release
 
@@ -63,6 +64,17 @@ def flash_running():
     return False
 
 
+def busy_reason():
+    """Why no flash, update or diagnostic job may start now (one job at a time)."""
+    if diag.running():
+        return "A diagnostic test or its restore is running. Wait for it to finish."
+    if flash_running():
+        return "A flash, software update or diagnostic test is already running."
+    if update.running():
+        return "A software update is running."
+    return None
+
+
 def a314d_state():
     try:
         return subprocess.run([config.SYSTEMCTL, "is-active", config.A314_SERVICE],
@@ -102,7 +114,7 @@ def job_status(job):
     result = config.read_json(config.JOB_DIR / f"{job}.json", None)
     if result is not None:
         return "done", result
-    return ("running", None) if flash_running() else ("stopped", None)
+    return ("running", None) if flash_running() or diag.running() else ("stopped", None)
 
 
 def create_app():
@@ -208,6 +220,7 @@ def create_app():
         if app.config.get("UPDATE_AUTOCHECK") and update.stale():
             background_check()
         return render_template("index.html", state=state, stored=[p.name for p in stored],
+                               diag_recovery=diag.recovery(),
                                versions=config.read_json(config.VERSIONS_FILE, {}),
                                a314d=a314d_state(), job=job, job_state=status,
                                spirom=config.SPIROM_FILE.exists(), update=update.cached(),
@@ -237,8 +250,8 @@ def create_app():
     @app.post("/update/start")
     @login_required
     def update_start():
-        if flash_running() or update.running():
-            flash("A flash or update is already running.", "error")
+        if busy_reason():
+            flash(busy_reason(), "error")
             return redirect(url_for("index"))
         config.JOB_DIR.mkdir(parents=True, exist_ok=True)
         job = "update-" + time.strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(3)
@@ -255,6 +268,7 @@ def create_app():
     @login_required
     def api_status():
         return jsonify(state=config.load_state(), a314d=a314d_state(), flashing=flash_running(),
+                       diagnosing=diag.running(),
                        versions=config.read_json(config.VERSIONS_FILE, {}))
 
     def new_upload(source, name):
@@ -405,14 +419,14 @@ def create_app():
             return redirect(url_for("index"))
         state = config.load_state()
         return render_template("review.html", token=token, release=release.summary(),
-                               plan=plan(release, state), state=state, busy=flash_running())
+                               plan=plan(release, state), state=state, busy=busy_reason())
 
     @app.post("/flash/<token>")
     @login_required
     def start_flash(token):
         path = upload_zip(token)
-        if flash_running() or update.running():
-            flash("A flash or software update is already running.", "error")
+        if busy_reason():
+            flash(busy_reason(), "error")
             return redirect(url_for("index"))
         config.JOB_DIR.mkdir(parents=True, exist_ok=True)
         job = time.strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(3)
@@ -422,15 +436,7 @@ def create_app():
             cmd.append("--force-fpga")
         if request.form.get("force_cpld"):
             cmd.append("--force-cpld")
-        with open(config.JOB_DIR / f"{job}.log", "w") as log_file:
-            # Own session: the flash finishes even if the web service restarts.
-            child = subprocess.Popen(cmd, stdout=log_file, stderr=subprocess.STDOUT,
-                                     stdin=subprocess.DEVNULL, start_new_session=True,
-                                     cwd=str(Path(__file__).resolve().parent.parent))
-        threading.Thread(target=child.wait, daemon=True).start()   # reap when done
-        (config.JOB_DIR / "current").write_text(job)
-        prune_jobs()
-        return redirect(url_for("job_page", job=job))
+        return start_job(job, cmd)
 
     def job_file(job, suffix):
         if not job.replace("-", "").isalnum():
@@ -444,7 +450,7 @@ def create_app():
     @login_required
     def job_page(job):
         job_file(job, ".log")
-        return render_template("job.html", job=job)
+        return render_template("job.html", job=job, warning=diag.WARNING_POWER)
 
     @app.get("/job/<job>/log")
     @login_required
@@ -461,6 +467,225 @@ def create_app():
             status = "running"      # just started, flasher has not taken the lock yet
         return jsonify(text=chunk.decode("utf-8", "replace"), offset=offset + len(chunk),
                        status=status, result=result)
+
+    # --- diagnostics ---------------------------------------------------------------
+
+    def diag_form():
+        """(actions, preset ids or None, test mask or None) from the Diagnostics form."""
+        what = request.form.get("action", "all")
+        actions = {"board": ["board"], "timing": ["timing"], "all": ["board", "timing"]}.get(what)
+        if actions is None:
+            abort(400)
+        chosen = sorted({int(p) for p in request.form.getlist("preset") if p.isdigit()})
+        everything = {p["id"] for p in diag.presets(diag.images_status().get("info"))}
+        presets = None if not chosen or set(chosen) >= everything else chosen
+        bits = [int(b) for b in request.form.getlist("test") if b.isdigit() and int(b) < 32]
+        mask_text = request.form.get("tests", "").strip()
+        known = {t["bit"] for t in diag.tests(diag.images_status().get("info"))}
+        if bits and known and set(bits) >= known:
+            mask = None                                 # every listed test = all
+        elif bits:
+            mask = sum(1 << b for b in set(bits))
+        elif mask_text:
+            try:
+                mask = int(mask_text, 0) & diag.ALL_TESTS
+            except ValueError:
+                abort(400)
+        else:
+            mask = None
+        if mask == diag.ALL_TESTS:
+            mask = None
+        return what, actions, presets, mask
+
+    def diag_runs():
+        runs = []
+        folder = diag.runs_dir()
+        for run in sorted(folder.iterdir(), reverse=True) if folder.is_dir() else []:
+            outcome = config.read_json(run / "outcome.json", None)
+            if run.is_dir() and outcome:
+                runs.append({"job": run.name, "outcome": outcome,
+                             "zip": diag.find_zip(run) is not None})
+        return runs[:diag.KEEP_RUNS]
+
+    @app.get("/diag")
+    @login_required
+    def diag_page():
+        status = diag.images_status()
+        info = status.get("info") or {}
+        job = current_job()
+        running_job = job if job and job.startswith("diag") and diag.running() else None
+        return render_template("diag.html", warning=diag.WARNING, warning_power=diag.WARNING_POWER,
+                               status=status, presets=diag.presets(info), tests=diag.tests(info),
+                               busy=busy_reason(), running_job=running_job,
+                               pending=diag.pending_restore(), recovery=diag.recovery(),
+                               runs=diag_runs(), names=diag.ACTION_NAMES)
+
+    @app.post("/diag/start")
+    @login_required
+    def diag_confirm():
+        what, actions, presets, mask = diag_form()
+        status = diag.images_status()
+        if not status["ok"]:
+            flash(status["reason"], "error")
+            return redirect(url_for("diag_page"))
+        names = {p["id"]: p["name"] for p in diag.presets(status.get("info"))}
+        return render_template("diag_confirm.html", warning=diag.WARNING,
+                               warning_power=diag.WARNING_POWER, first_step=diag.WARNING_FIRST_STEP,
+                               what=what, actions=actions, names=diag.ACTION_NAMES, presets=presets,
+                               preset_names=names, mask=mask, build=status["info"].get("build"),
+                               handle_max=diag.HANDLE_MAX, note_max=diag.NOTE_MAX)
+
+    @app.post("/diag/run")
+    @login_required
+    def diag_run():
+        what, actions, presets, mask = diag_form()
+        reason = busy_reason()
+        if not reason and diag.pending_restore():
+            reason = "An earlier diagnostic test was not restored. Run the restore check first."
+        status = diag.images_status() if not reason else None
+        if status and not status["ok"]:
+            reason = status["reason"]
+        if reason:
+            flash(reason, "error")
+            return redirect(url_for("diag_page"))
+        config.JOB_DIR.mkdir(parents=True, exist_ok=True)
+        job = "diag-" + time.strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(3)
+        cmd = [sys.executable, "-m", "tfpi.diag", "run", "--job", job, "--actions", ",".join(actions),
+               "--result", str(config.JOB_DIR / f"{job}.json")]
+        if presets:
+            cmd += ["--presets", ",".join(map(str, presets))]
+        if mask is not None:
+            cmd += ["--tests", f"0x{mask:08x}"]
+        handle = diag.clean_text(request.form.get("handle"), diag.HANDLE_MAX)
+        note = diag.clean_text(request.form.get("note"), diag.NOTE_MAX, lines=True)
+        if handle or note:          # the job writes them to contact.txt in its run folder
+            config.write_json(config.JOB_DIR / f"{job}.contact.json", {"handle": handle, "note": note})
+        return start_job(job, cmd)
+
+    def start_job(job, cmd):
+        with open(config.JOB_DIR / f"{job}.log", "w") as log_file:
+            # Own session: the job finishes even if the web service restarts.
+            child = subprocess.Popen(cmd, stdout=log_file, stderr=subprocess.STDOUT,
+                                     stdin=subprocess.DEVNULL, start_new_session=True,
+                                     cwd=str(Path(__file__).resolve().parent.parent))
+        threading.Thread(target=child.wait, daemon=True).start()   # reap when done
+        (config.JOB_DIR / "current").write_text(job)
+        prune_jobs()
+        return redirect(url_for("job_page", job=job))
+
+    @app.post("/diag/recover")
+    @login_required
+    def diag_recover():
+        if busy_reason() or not diag.pending_restore():
+            flash(busy_reason() or "Nothing to restore.", "error")
+            return redirect(url_for("diag_page"))
+        config.JOB_DIR.mkdir(parents=True, exist_ok=True)
+        job = "diagrecover-" + time.strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(3)
+        return start_job(job, [sys.executable, "-m", "tfpi.diag", "recover", "--job", job,
+                               "--result", str(config.JOB_DIR / f"{job}.json")])
+
+    @app.post("/diag/forget")
+    @login_required
+    def diag_forget():
+        if diag.running():
+            flash(busy_reason(), "error")
+        else:
+            diag.forget()
+            flash("Cleared. Power-cycle the Amiga before testing again if you haven't.", "ok")
+        return redirect(url_for("diag_page"))
+
+    @app.post("/diag/recovery/dismiss")
+    @login_required
+    def diag_dismiss():
+        diag.dismiss_recovery()
+        return redirect(request.form.get("back") if request.form.get("back") in ("/", "/diag")
+                        else url_for("diag_page"))
+
+    @app.post("/diag/abort/<job>")
+    @login_required
+    def diag_abort(job):
+        record = diag.current() or {}
+        if record.get("job") == job and diag.running() and record.get("pid"):
+            try:
+                os.kill(int(record["pid"]), signal.SIGTERM)
+                flash("Abort sent. The machine is being restored; wait for it to finish.", "ok")
+            except (OSError, ValueError):
+                flash("Couldn't signal the test.", "error")
+        else:
+            flash("That test isn't running.", "error")
+        return redirect(url_for("job_page", job=job))
+
+    def diag_regions():
+        from tfdiag import amiga
+        return amiga.REGIONS
+
+    def diag_run_dir(job):
+        if not job.replace("-", "").isalnum():
+            abort(404)
+        folder = diag.runs_dir() / job
+        if not folder.is_dir():
+            abort(404)
+        return folder
+
+    @app.get("/diag/result/<job>")
+    @login_required
+    def diag_result(job):
+        folder = diag_run_dir(job)
+        outcome = config.read_json(folder / "outcome.json", None)
+        found = diag.find_zip(folder)
+        return render_template("diag_result.html", job=job, outcome=outcome,
+                               run=config.read_json(folder / "run.json", {}),
+                               zip_name=found.name if found else None,
+                               contents=diag.zip_contents(found) if found else [],
+                               names=diag.ACTION_NAMES, running=diag.running() and
+                               (diag.current() or {}).get("job") == job,
+                               report=diag.viewable(folder, "report.html") is not None,
+                               summary=diag.page_summary(folder, diag.images_status().get("info")),
+                               region_titles={k: v[0] for k, v in diag_regions().items()},
+                               waves=diag.wave_svgs(folder),
+                               contact=diag.contact(folder), handle_max=diag.HANDLE_MAX,
+                               note_max=diag.NOTE_MAX, what_to_do=diag.WHAT_TO_DO,
+                               done_message=diag.DONE_MESSAGE)
+
+    @app.post("/diag/result/<job>/contact")
+    @login_required
+    def diag_contact(job):
+        folder = diag_run_dir(job)
+        if diag.running() and (diag.current() or {}).get("job") == job:
+            flash("This test is still running.", "error")
+            return redirect(url_for("diag_result", job=job))
+        try:
+            diag.write_contact(folder, request.form.get("handle"), request.form.get("note"))
+            diag.rebuild_zip(folder)
+            flash("Saved in the zip (contact.txt). It's only sent if you send the zip.", "ok")
+        except OSError as error:
+            flash(f"Couldn't update the zip: {error}", "error")
+        return redirect(url_for("diag_result", job=job))
+
+    # The report runs its own inline script (the board view). It is served as its own
+    # document under a CSP sandbox: scripts run, but in an opaque origin, so the report
+    # can't reach this page's session or the rest of the app, framed or in a new tab.
+    REPORT_CSP = ("sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; "
+                  "style-src 'unsafe-inline'; img-src data:; font-src data:")
+
+    @app.get("/diag/result/<job>/file/<path:name>")
+    @login_required
+    def diag_file(job, name):
+        path = diag.viewable(diag_run_dir(job), name)
+        if path is None:
+            abort(404)
+        reply = send_file(path, mimetype=diag.VIEWABLE[path.suffix.lower()], max_age=0)
+        reply.headers["Content-Security-Policy"] = REPORT_CSP
+        reply.headers["X-Content-Type-Options"] = "nosniff"
+        return reply
+
+    @app.get("/diag/result/<job>/download")
+    @login_required
+    def diag_download(job):
+        found = diag.find_zip(diag_run_dir(job))
+        if found is None:
+            abort(404)
+        return send_file(found, as_attachment=True, download_name=found.name, max_age=0)
 
     # --- the a314fs share -----------------------------------------------------------
 

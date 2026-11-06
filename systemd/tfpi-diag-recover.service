@@ -1,0 +1,21 @@
+[Unit]
+Description=TF Pi: restore after a diagnostic test interrupted by power loss
+# Runs only when a test was in progress: tfdiag's marker or tfpi's run record.
+ConditionPathExists=|/var/lib/tfpi/diag-in-progress
+ConditionPathExists=|/var/lib/tfpi/diag/current.json
+# Before a314d (shares spidev0.0 with the diag protocol) and the web page.
+# Ordering only: a314d and the page start whatever the outcome.
+Before=a314d.service tfpi-web.service
+After=local-fs.target
+
+[Service]
+Type=oneshot
+Environment=PYTHONPATH=/opt/tfpi/lib
+WorkingDirectory=/opt/tfpi/lib
+# Runs `python3 -m tfdiag recover --before <path from the marker>`, then keeps
+# the partial results downloadable and records the result for the page banner.
+ExecStart=/usr/bin/python3 -m tfpi.diag recover
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,10 @@
+{% set rec = recovery if recovery is defined else diag_recovery %}{% if rec %}
+<div class="{{ 'banner-ok' if rec.ok else 'banner-bad' }}">
+{% if rec.ok %}<b>A diagnostic test was interrupted by power loss: recovered OK.</b>
+{% else %}<b>A diagnostic test was interrupted by power loss and the machine was not restored.</b>
+{% if rec.differences %}<ul>{% for d in rec.differences %}<li>{{ d }}</li>{% endfor %}</ul>{% endif %}
+{% if rec.advice %}<p>{{ rec.advice }}</p>{% endif %}
+<p><b>What to do:</b> Power-cycle the Amiga (the Pi restarts with it). If the main TF Pi page still shows a problem afterwards, reflash the firmware from the main TF Pi page.</p>{% endif %}
+{% if rec.zip and rec.rundir %}<a href="/diag/result/{{ rec.rundir }}">Partial results</a> are kept for download.{% endif %}
+<form class="inline" method="post" action="/diag/recovery/dismiss"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="back" value="{{ request.path }}"><button class="secondary">Dismiss</button></form>
+</div>{% endif %}

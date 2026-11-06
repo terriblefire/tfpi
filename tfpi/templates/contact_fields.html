@@ -1,0 +1,12 @@
+<fieldset><legend>Contact (optional, only goes in the zip as contact.txt)</legend>
+<p><label>Discord / forum handle (optional)<br><input name="handle" id="contact-handle" maxlength="{{ handle_max }}" value="{{ contact.handle if contact is defined else '' }}" style="font:inherit;padding:6px;width:20em;max-width:100%"></label></p>
+<p><label>What's the problem? (optional)<br><textarea name="note" maxlength="{{ note_max }}" rows="4" style="font:inherit;padding:6px;width:100%">{{ contact.note if contact is defined else '' }}</textarea></label></p>
+<p class="muted">Nothing is sent anywhere: it's only in the zip you download. Your handle is remembered in this browser, not on the Pi.</p>
+</fieldset>
+<script>
+(() => {
+  const field = document.getElementById("contact-handle");
+  try { if (!field.value) field.value = localStorage.getItem("tfpi-diag-handle") || ""; } catch (e) {}
+  field.form.addEventListener("submit", () => { try { localStorage.setItem("tfpi-diag-handle", field.value.trim()); } catch (e) {} });
+})();
+</script>

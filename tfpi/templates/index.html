@@ -1,5 +1,6 @@
 {% extends "base.html" %}{% block body %}
-{% if job and job_state == "running" %}<div class="flash">{{ "A software update" if job.startswith("update-") else "A flash" }} is running. <a href="/job/{{ job }}">Watch it</a>.</div>{% endif %}
+{% if job and job_state == "running" %}<div class="flash">{{ "A software update" if job.startswith("update-") else "A diagnostic test" if job.startswith("diag") else "A flash" }} is running. <a href="/job/{{ job }}">Watch it</a>.</div>{% endif %}
+{% include "diag_banner.html" %}
 <div class="card"><h1>Installed firmware</h1>
 <table>
 <tr><th>Release</th><td>{% if state.release %}<span class="mono">{{ state.release }}</span>{% else %}<span class="muted">unknown (nothing flashed through this page yet)</span>{% endif %}</td></tr>
