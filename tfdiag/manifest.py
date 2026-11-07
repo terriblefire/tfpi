@@ -6,6 +6,8 @@
     "build": "abc1234",                              # commit the images were built from
     "spi_protocol": 1,                               # diag ID version byte (0xA2) of diag_timing.bin
     "cpld_usercodes": ["0x54463630", ...],           # CPLD designs the timing image works with
+    "cpld_fuses": ["<sha256>", ...],                 # ... by fuse map (fwid fuse_sha256): the
+                                                     # usercode is the same for every build
     "presets": [0, 2, 5],                            # default CLKSEL presets (optional)
     "tests": [{"bit": 0, "name": "chip"}, ...]       # test mask bits (optional)
   }
@@ -65,6 +67,26 @@ def cpld_compatible(manifest, usercode):
     return False, (f"CPLD usercode 0x{uc:08x} is not one the timing image was built for "
                    f"({', '.join(f'0x{c:08x}' for c in codes)}): update the firmware or tfpi; "
                    "the board test still runs")
+
+
+def cpld_design_compatible(manifest, fuse_sha256, usercode, any_cpld=False):
+    """(ok, message): the timing image against the CPLD design read back from the board
+    (fuse map checksum). The usercode check is only the fallback when the readback failed."""
+    fuses = manifest.get("cpld_fuses")
+    if any_cpld:
+        return True, "CPLD design check overridden (TFDIAG_ANY_CPLD): the timing image runs on any CPLD"
+    if not fuses:
+        return cpld_compatible(manifest, usercode)
+    if not fuse_sha256:
+        ok, msg = cpld_compatible(manifest, usercode)
+        return ok, msg + " (the CPLD design could not be read back, so only its usercode was checked)"
+    if fuse_sha256 in fuses:
+        return True, f"the BUS CPLD design (fuses {fuse_sha256[:16]}) is one the timing image supports"
+    names = manifest.get("cpld_fuses_note") or "the current release"
+    return False, (f"the BUS CPLD design on this board (fuses {fuse_sha256[:16]}) is not one the timing image "
+                   f"supports ({names}). The timing capture would give wrong results with it, so it is not "
+                   "run: update the TF firmware (both chips) to the current release, then run again. "
+                   "The board test still runs.")
 
 
 def diag_id_matches(manifest, did):

@@ -563,6 +563,22 @@ class ResultSummaryTests(DiagWebBase):
         self.assertIn("should not be taken as an indication of a real fault", page)
         self.assertIn(fs["first"][0]["title"], page)
 
+    def test_exerciser_findings_get_their_own_card(self):
+        job, rundir = self.fixture_run()
+        tm = json.loads((rundir / "timing" / "timing.json").read_text())
+        tm["results"] = [{"preset": 0, "test": 0x53, "group": "test 0x53", "size": 4, "flags": [], "failure": True,
+                          "addr": "0x00bfe400", "expected": "0x00a500a5", "got": "0x00a500ff"}]
+        tm["hangs"] = [{"preset": 2, "group": "clock switch", "why": "stopped (heartbeat frozen)"}]
+        (rundir / "timing" / "timing.json").write_text(json.dumps(tm))
+        fs = diag.board_findings(rundir)
+        self.assertEqual(fs["exerciser"]["count"], 2)
+        self.assertTrue(all("0x53" not in f["title"] for f in fs["first"]))
+        page = self.client.get(f"/diag/result/{job}").get_data(as_text=True)
+        self.assertIn("<h2>Timing capture findings</h2>", page)
+        board_card = page.split("<h2>Board test findings (experimental)</h2>")[-1].split("</div>")[0] \
+            if "Board test findings" in page else ""
+        self.assertNotIn("test 0x53", board_card)
+
     def test_partial_or_broken_files_still_render(self):
         job, rundir = self.fixture_run()
         (rundir / "timing" / "histograms.json").write_text('{"histograms": {"0": {"chip": {"bins": "nonsense"}}}}')

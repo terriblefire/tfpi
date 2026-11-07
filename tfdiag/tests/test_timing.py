@@ -1,4 +1,5 @@
 import json
+import unittest
 
 from tfdiag.tests import helpers
 from tfdiag.tests import fakes
@@ -304,3 +305,45 @@ class Timing(helpers.Base):
         self.assertAlmostEqual(T.frac_above(0, bins, 150.0, 100.0), 1 / 11)
         ph = T.hist_stats(16, [0] + [1] * 31, 100.0)
         self.assertEqual(len(ph["phase"]), P.AMIGA_PERIOD_HALF)
+
+
+class StartCapture(helpers.Base):
+    state = {"ex": {"hang_preset": None, "errors": [], "phases_per_preset": 3, "no_body_once": False,
+                    "stale_dsack_preset": None, "no_boot": True}}
+
+    def test_failed_start_is_captured(self):
+        out = self.env.tmp / "job"
+        from tfdiag.tests import helpers as h
+        rc, evs = h.run_cli(self.env, ["run", "--images", str(self.env.images), "--out", str(out),
+                                       "--presets", "0", "--secs", "0.2", "--no-board"])
+        tm = json.loads((out / "timing" / "timing.json").read_text())
+        caps = tm["start_captures"]
+        self.assertEqual([c["attempt"] for c in caps], [1, 2])
+        for c in caps:
+            self.assertEqual(c["outcome"], "no answer")
+            self.assertTrue((out / "timing" / c["file"]).exists(), c)
+            self.assertIn("summary", c)
+        msg = next(e["msg"] for e in evs if e.get("name") == "exerciser_start")
+        self.assertIn("attempt 1:", msg)
+        self.assertIn("wave_start_a", msg)
+        self.assertEqual(self.board()["forbidden"], [])     # no address log before the body runs
+
+
+class FabricClock(unittest.TestCase):
+    class _R:
+        fabric_mhz = T.TimingRun.fabric_mhz
+
+    def rate(self, samples):
+        r = self._R()
+        r.fab = {0: samples}
+        return r.fabric_mhz(0)
+
+    def test_reload_break(self):
+        self.assertEqual(self.rate([(0, 0.0), (100_000_000, 1.0), None, (5_000_000, 40.0), (105_000_000, 41.0)]), 100.0)
+
+    def test_missed_reload_is_skipped(self):
+        # the counter restarted between samples 2 and 3: that step would read ~4.2 GHz
+        self.assertEqual(self.rate([(0, 0.0), (100_000_000, 1.0), (5_000_000, 2.0), (105_000_000, 3.0)]), 100.0)
+
+    def test_wrap_still_counts(self):
+        self.assertEqual(self.rate([(0xFFFF0000, 0.0), (0xFFFF0000 + 50_000_000 - (1 << 32), 1.0)]), 50.0)

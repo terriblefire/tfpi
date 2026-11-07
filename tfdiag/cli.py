@@ -78,12 +78,16 @@ def cmd_board(cfg, hw, ev, args):
     return 1 if short else 0
 
 
-def check_cpld(hw, ev, info):
-    """The timing image only runs on CPLD designs listed in the manifest."""
+def check_cpld(hw, ev, info, before=None, cfg=None):
+    """The timing image only runs on CPLD designs listed in the manifest: by the fuse map
+    read back in the snapshot (before["firmware"]), else by usercode."""
     from . import manifest
     with hw.cpld() as c:
         idc, uc = c.ids()
-    ok, msg = manifest.cpld_compatible(info, uc)
+    if before is None and cfg is not None:
+        before = (S.read_json(cfg.marker) or {}).get("before")
+    fuse = (((before or {}).get("firmware") or {}).get("cpld") or {}).get("fuse_sha256")
+    ok, msg = manifest.cpld_design_compatible(info, fuse, uc, any_cpld=bool(cfg and cfg.any_cpld))
     ev.result("cpld_compatibility", "info" if ok else "incomplete", msg, step="timing")
     return ok
 
@@ -94,7 +98,7 @@ def cmd_timing(cfg, hw, ev, args):
     _a314_stopped(hw, ev)
     S.set_stage(cfg, "timing")
     info = timing.load_info(args.images)
-    if not check_cpld(hw, ev, info):
+    if not check_cpld(hw, ev, info, cfg=cfg):
         ev.done(False, "timing test not run: CPLD design not supported by the timing image")
         return 2
     presets = _parse_presets(args.presets, info)
@@ -154,7 +158,7 @@ def cmd_run(cfg, hw, ev, args):
                     S.set_stage(cfg, "board")
                     with hw.cpld() as cpld, hw.spi() as spi:
                         board.run_board(cpld, spi, hw.fpga, ev, out / "board", args.images, info)
-                if not args.no_timing and check_cpld(hw, ev, info):
+                if not args.no_timing and check_cpld(hw, ev, info, before=before, cfg=cfg):
                     S.set_stage(cfg, "timing")
                     with hw.spi() as spi:
                         tr = timing.TimingRun(spi, hw.fpga, ev, out / "timing", args.images, info,

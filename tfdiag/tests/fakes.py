@@ -577,8 +577,12 @@ class FakeSpiDev:
         return struct.unpack_from(">H", self.sram, P.MAILBOX + off)[0]
 
     def _boot(self, s):
-        """Reset released: the stub runs, checks the body and the plan."""
+        """Reset released: the stub runs, checks the body and the plan (ex "no_boot": the 060
+        never reaches the TF boot ROM, as on a board whose reset/boot path is broken)."""
         mb = P.MAILBOX
+        if s["ex"].get("no_boot"):
+            self.ex = None
+            return
         if bytes(self.sram[mb:mb + 4]) != P.MAGIC_RUNNING:
             struct.pack_into(">I", self.sram, mb + P.MB_BOOTS, 0)
             struct.pack_into(">I", self.sram, mb + P.MB_HEARTBEAT, 0)

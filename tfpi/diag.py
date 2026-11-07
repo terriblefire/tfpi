@@ -555,15 +555,20 @@ def clock_checks(rundir):
 
 
 def board_findings(rundir, limit=5):
-    """{"count", "first": [...]} from tfdiag's boardview findings (what the board view shows)."""
+    """{"count", "first": [...], "exerciser": {"count", "first"}} from tfdiag's boardview
+    findings (what the board view shows): the board test's (experimental) and the timing
+    capture's (exerciser) apart."""
     try:
         from tfdiag import boardview, report
         found = boardview.findings(report.collect(Path(rundir)))
     except Exception as error:          # the page must still render
-        return {"count": 0, "first": [], "error": str(error)}
+        return {"count": 0, "first": [], "exerciser": {"count": 0, "first": []}, "error": str(error)}
     found = [f for f in found if f.get("kind") != "note"]
-    return {"count": len(found), "first": [{"title": f.get("title", ""), "detail": f.get("detail", ""),
-                                            "where": f.get("where", "")} for f in found[:limit]]}
+    short = lambda fs: [{"title": f.get("title", ""), "detail": f.get("detail", ""),
+                         "where": f.get("where", "")} for f in fs[:limit]]
+    board = [f for f in found if f.get("source") != "exerciser"]
+    ex = [f for f in found if f.get("source") == "exerciser"]
+    return {"count": len(board), "first": short(board), "exerciser": {"count": len(ex), "first": short(ex)}}
 
 
 def firmware_on_board(rundir):

@@ -23,5 +23,9 @@
   11,
   12
  ],
- "note": "v1: tf4060v2 2948a9b8 (PR #97), seed 10, post-route 101.52 MHz; presets with fabric clock <= 100 MHz only; exerciser body 3 (expansion board list, tf4060-diag zorro-enum); diag_pins.bin parks the IDE strobes (IOR/IOW/IDECS high)"
+ "note": "v1: tf4060v2 2948a9b8 (PR #97), seed 10, post-route 101.52 MHz; presets with fabric clock <= 100 MHz only; exerciser body 3 (expansion board list, tf4060-diag zorro-enum); diag_pins.bin parks the IDE strobes (IOR/IOW/IDECS high)",
+ "cpld_fuses": [
+  "36fb76bba977a2bf9cd5db7dba5981cd7cce7bb5a76eb605ee5932411739084a"
+ ],
+ "cpld_fuses_note": "the QCLK BUS CPLD of releases 2026-11-04_667a6e7 and 2026-11-05_f555529"
 }
