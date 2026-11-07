@@ -1,0 +1,65 @@
+{
+ "note": "Official TF4060 r5 releases: firmware ids as tfdiag reads them back from a board (fwid.py). Add one with: python3 -m tfdiag fwid --catalog tfpi/known_firmware.json --name NAME --image FLASH.bin --jed BUS.jed",
+ "releases": [
+  {
+   "name": "tf4060r5_20261022",
+   "git": null,
+   "date": "2026-10-22",
+   "fpga": {
+    "bitstream_sha256": "e56bab1d9bd891b5ed61c04a0756cac7c26e938689dadddf8daa5d3ef0736143",
+    "image_sha256": "dd0794675afb2ee514194d4723f0ed2c4902d8ae1e98de733c4d21a40135bfb4"
+   },
+   "cpld": [
+    {
+     "file": "tf4060r5_bus_bfg.jed",
+     "fuse_sha256": "32833aac7e4fb4cf0c35eeb70043908247c5ffde984c001f75a7b81a680e8222"
+    }
+   ]
+  },
+  {
+   "name": "tf4060r5_20261023",
+   "git": "639a471",
+   "date": "2026-10-23",
+   "fpga": {
+    "bitstream_sha256": "6ed4429e2629aa7f00d101ed2781779c48c4ee43836329f57fd5ecbdd75a8d3f",
+    "image_sha256": "1c7388322a5d9c747a35e6f05f102092e2c43fb9ef7e9f8f30a508c79a383ad0"
+   },
+   "cpld": [
+    {
+     "file": "cpld_p6.jed",
+     "fuse_sha256": "9a216d3aba2934c424be646d272e4d9d2e05e82a2db879479ef3d6a649d30871"
+    }
+   ]
+  },
+  {
+   "name": "tf4060r5_2026-11-04_667a6e7",
+   "git": "667a6e7",
+   "date": "2026-11-04",
+   "fpga": {
+    "bitstream_sha256": "f913a0731bb7dff2799b039e15e84304e3e7985069f85d04efc5414af6cd2933",
+    "image_sha256": "4c52c9543d571de304194e7f0f652be9a199425e87c90884ef96c06db50d681e"
+   },
+   "cpld": [
+    {
+     "file": "tf4060r5_bus_prod.jed",
+     "fuse_sha256": "36fb76bba977a2bf9cd5db7dba5981cd7cce7bb5a76eb605ee5932411739084a"
+    }
+   ]
+  },
+  {
+   "name": "tf4060r5_2026-11-05_f555529",
+   "git": "f555529",
+   "date": "2026-11-05",
+   "fpga": {
+    "bitstream_sha256": "1e637f7f26a775277e3aabd5f56010e05c621f3debddfdeb4ba5bc9fccf4c3f2",
+    "image_sha256": "a90b3df86f31d99a93d306df58704a754174a9a8bdf58454a74b04e10c617392"
+   },
+   "cpld": [
+    {
+     "file": "tf4060r5_bus_prod.jed",
+     "fuse_sha256": "36fb76bba977a2bf9cd5db7dba5981cd7cce7bb5a76eb605ee5932411739084a"
+    }
+   ]
+  }
+ ]
+}

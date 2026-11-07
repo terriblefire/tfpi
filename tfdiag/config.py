@@ -23,6 +23,17 @@ _STATE = _env("STATE_DIR", "/var/lib/tfpi", "STATE_DIR")
 class Config:
     fomu_flash: str = _env("FOMU_FLASH", "fomu-flash", "FOMU_FLASH")
     openocd: str = _env("OPENOCD", "openocd")
+    # read only: cpldread.py runs nothing but xc3sprog's read action (FILE:r)
+    xc3sprog: str = _env("XC3SPROG", "xc3sprog", "XC3SPROG")
+    xc3sprog_cable: str = _env("XC3SPROG_CABLE", "gpiod_creator", "XC3SPROG_CABLE")
+    cpld_readback: bool = _env("CPLD_READBACK", "1") not in ("0", "no", "false", "")
+    cpld_read_timeout: float = float(_env("CPLD_READ_TIMEOUT", "300"))
+    tfpi_state: str = _env("TFPI_STATE", str(Path(_STATE) / "state.json"))
+    iceunpack: str = _env("ICEUNPACK", "iceunpack")
+    # known releases (official builds' firmware ids), shipped with tfpi
+    known_firmware: str = _env("KNOWN_FIRMWARE",
+                               str(Path(__file__).resolve().parent.parent / "tfpi" / "known_firmware.json"))
+    firmware_dir: str = _env("FIRMWARE_DIR", str(Path(_STATE) / "firmware"))
     pinctrl: str = _env("PINCTRL", "pinctrl", "PINCTRL")
     systemctl: str = _env("SYSTEMCTL", "systemctl", "SYSTEMCTL")
     setgpio: str = _env("SETGPIO", str(Path(_SHARE) / "setgpio.sh"), "SETGPIO")
@@ -37,8 +48,9 @@ class Config:
     netlist: str = _env("NETLIST", str(Path(__file__).resolve().parent / "data" / "r5_netlist.json"))
     openocd_tcl_port: int = int(_env("OPENOCD_PORT", "6666"))
     spi_hz: int = int(_env("SPI_HZ", "4000000"))
-    # bytes of SPI flash read for the image checksum: bitstream + SSBL/ROMFS (0x21000 + ...)
-    flash_check_bytes: int = int(_env("FLASH_CHECK_BYTES", str(0x100000)), 0)
+    # bytes of SPI flash read for the image checksum and firmware id: bitstream +
+    # SSBL/ROMFS (0x21000 + ~0.9 MB, so more than 1 MB); clamped to the chip's size
+    flash_check_bytes: int = int(_env("FLASH_CHECK_BYTES", str(0x200000)), 0)
     cdone_timeout: float = float(_env("CDONE_TIMEOUT", "5"))
     board_wait: float = float(_env("BOARD_WAIT", "600"))     # seconds to wait for a board that went away
     tool_timeout: float = float(_env("TOOL_TIMEOUT", "120"))

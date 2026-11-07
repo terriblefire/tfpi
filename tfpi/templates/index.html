@@ -1,5 +1,5 @@
 {% extends "base.html" %}{% block body %}
-{% if job and job_state == "running" %}<div class="flash">{{ "A software update" if job.startswith("update-") else "A diagnostic test" if job.startswith("diag") else "A flash" }} is running. <a href="/job/{{ job }}">Watch it</a>.</div>{% endif %}
+{% if job and job_state == "running" %}<div class="flash">{{ "A software update" if job.startswith("update-") else "A diagnostic test" if job.startswith("diag") else "A firmware check" if job.startswith("verify-") else "A flash" }} is running. <a href="/job/{{ job }}">Watch it</a>.</div>{% endif %}
 {% include "diag_banner.html" %}
 <div class="card"><h1>Installed firmware</h1>
 <table>
@@ -12,7 +12,17 @@
   <span class="muted">· {{ state.cpld.flashes }} flashes{% if state.cpld.time %} · last {{ state.cpld.time }}{% endif %}</span>
   {% if state.cpld.fault %}<br><span class="bad">LOCKED: {{ state.cpld.fault }}</span>{% endif %}</td></tr>
 <tr><th>a314d</th><td class="{{ 'ok' if a314d == 'active' else 'warn' }}">{{ a314d }}</td></tr>
-</table></div>
+</table>
+<p class="muted">The release and checksums above are what this page last flashed. <b>Verify</b> reads the firmware back from the chips and checks it against the known releases.</p>
+{% if verify %}<table>
+<tr><th>Verified</th><td>{{ verify.time }}{% if not verify.restore_ok %} <span class="bad">· not restored: {{ verify.advice or "see the log" }}</span>{% endif %}</td></tr>
+{% for chip, label in (("fpga", "RAM FPGA"), ("cpld", "BUS CPLD")) %}{% set v = verify.verdict.get(chip) or {} %}
+<tr><th>{{ label }}</th><td class="{{ 'ok' if v.state == 'known' else 'warn' if v.state == 'unknown' else 'bad' }}">{{ v.state or "not read" }}{% if v.release %} · <span class="mono">{{ v.release }}</span>{% endif %}
+<br><span class="muted">{{ v.detail }}</span>{% if chip == "fpga" and v.git and v.state == "known" %}<br><span class="muted mono">boot ROM git {{ v.git }} · {{ v.built }}</span>{% endif %}</td></tr>{% endfor %}
+</table>{% endif %}
+<form method="post" action="/verify" onsubmit="return confirm({{ (verify_warning ~ ' ' ~ warning_screen) | tojson | forceescape }})"><input type="hidden" name="csrf" value="{{ csrf }}">
+<button class="secondary" {% if job_state == "running" %}disabled{% endif %}>Verify</button> <span class="muted">{{ verify_warning }}</span></form>
+</div>
 
 <div class="card"><h2>Deploy new firmware</h2>
 <form method="post" action="/upload" enctype="multipart/form-data"><input type="hidden" name="csrf" value="{{ csrf }}">

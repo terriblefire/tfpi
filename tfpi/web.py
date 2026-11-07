@@ -224,6 +224,8 @@ def create_app():
                                versions=config.read_json(config.VERSIONS_FILE, {}),
                                a314d=a314d_state(), job=job, job_state=status,
                                spirom=config.SPIROM_FILE.exists(), update=update.cached(),
+                               verify=diag.last_verify(), verify_warning=diag.VERIFY_WARNING,
+                               warning_screen=diag.WARNING_SCREEN,
                                updating=update.running())
 
     checking = threading.Lock()
@@ -450,7 +452,8 @@ def create_app():
     @login_required
     def job_page(job):
         job_file(job, ".log")
-        return render_template("job.html", job=job, warning=diag.WARNING_POWER)
+        return render_template("job.html", job=job, warning=diag.WARNING_POWER,
+                               warning_screen=diag.WARNING_SCREEN)
 
     @app.get("/job/<job>/log")
     @login_required
@@ -514,7 +517,8 @@ def create_app():
         info = status.get("info") or {}
         job = current_job()
         running_job = job if job and job.startswith("diag") and diag.running() else None
-        return render_template("diag.html", warning=diag.WARNING, warning_power=diag.WARNING_POWER,
+        return render_template("diag.html", board_experimental=diag.BOARD_EXPERIMENTAL, warning=diag.WARNING, warning_power=diag.WARNING_POWER,
+                               warning_screen=diag.WARNING_SCREEN,
                                status=status, presets=diag.presets(info), tests=diag.tests(info),
                                busy=busy_reason(), running_job=running_job,
                                pending=diag.pending_restore(), recovery=diag.recovery(),
@@ -530,7 +534,7 @@ def create_app():
             return redirect(url_for("diag_page"))
         names = {p["id"]: p["name"] for p in diag.presets(status.get("info"))}
         return render_template("diag_confirm.html", warning=diag.WARNING,
-                               warning_power=diag.WARNING_POWER, first_step=diag.WARNING_FIRST_STEP,
+                               warning_power=diag.WARNING_POWER, warning_screen=diag.WARNING_SCREEN, first_step=diag.WARNING_FIRST_STEP,
                                what=what, actions=actions, names=diag.ACTION_NAMES, presets=presets,
                                preset_names=names, mask=mask, build=status["info"].get("build"),
                                handle_max=diag.HANDLE_MAX, note_max=diag.NOTE_MAX)
@@ -572,6 +576,23 @@ def create_app():
         (config.JOB_DIR / "current").write_text(job)
         prune_jobs()
         return redirect(url_for("job_page", job=job))
+
+    @app.post("/verify")
+    @login_required
+    def verify_start():
+        reason = busy_reason()
+        if not reason and diag.pending_restore():
+            reason = "An earlier diagnostic test was not restored. Run the restore check on the Diagnostics tab first."
+        status = diag.images_status() if not reason else None
+        if status and not status["ok"]:
+            reason = status["reason"]
+        if reason:
+            flash(reason, "error")
+            return redirect(url_for("index"))
+        config.JOB_DIR.mkdir(parents=True, exist_ok=True)
+        job = "verify-" + time.strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(3)
+        return start_job(job, [sys.executable, "-m", "tfpi.diag", "verify", "--job", job,
+                               "--result", str(config.JOB_DIR / f"{job}.json")])
 
     @app.post("/diag/recover")
     @login_required
@@ -633,7 +654,7 @@ def create_app():
         folder = diag_run_dir(job)
         outcome = config.read_json(folder / "outcome.json", None)
         found = diag.find_zip(folder)
-        return render_template("diag_result.html", job=job, outcome=outcome,
+        return render_template("diag_result.html", board_experimental=diag.BOARD_EXPERIMENTAL, job=job, outcome=outcome,
                                run=config.read_json(folder / "run.json", {}),
                                zip_name=found.name if found else None,
                                contents=diag.zip_contents(found) if found else [],

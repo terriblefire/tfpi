@@ -100,6 +100,13 @@ class Jtag(helpers.Base):
         self.assertEqual(bad, {"TS", "SIZ60<0>"})                    # the real short only
         ts = next(n for n in an["nets"] if n["name"] == "TS")
         self.assertIn("shorted to SIZ60<0>", ts["msg"])
+        self.assertNotIn("PCLK", an["float_changed"])            # a running clock is not "floating"
+        from tfdiag import boardview
+        fs = boardview.findings({"board": {"extest": dict(an, float_changed=["D<16>", "D<17>"])}})
+        fl = [f for f in fs if f["kind"] == "float"]
+        self.assertEqual(len(fl), 1)
+        self.assertIn("Amiga CPU-slot lines", fl[0]["detail"])
+        self.assertIn("can mean IOR is bad", fl[0]["detail"])
 
     def test_float_captures(self):
         self.env.board.update(lambda s: s.__setitem__("toggle", ["PCLK_CPLD"]))
@@ -142,6 +149,21 @@ class Jtag(helpers.Base):
                                   self.env.tmp / f"b{feat}", self.env.images, helpers.T_INFO(self.env))
             self.assertEqual(res["sdram_parked"], parked)
             self.assertEqual("SDRAM not parked" in res["skipped"].values(), not parked)
+
+    def test_parked_ide_pins_read_back(self):
+        from tfdiag import board, events as E, fpga as F
+        for stuck, want in (({}, []), ({"IOR": 0}, ["parked_IOR"])):
+            self.env.board.update(lambda s: s.__setitem__("stuck", stuck))
+            ev = E.Quiet()
+            spi = S.Spi(fakes.FakeSpiDev(self.env.state_path))
+            res = board.run_board(self.cpld(), spi, F.Fpga(self.env.cfg, E.Quiet()), ev,
+                                  self.env.tmp / f"p{len(want)}", self.env.images, helpers.T_INFO(self.env))
+            got = [r["name"] for r in ev.results if r["name"].startswith("parked_") and r["status"] == "finding"]
+            self.assertEqual(got, want)
+            self.assertEqual(res["parked_readback"]["IOR"], 0 if want else 1)
+            if want:
+                msg = next(r["msg"] for r in ev.results if r["name"] == "parked_IOR")
+                self.assertIn("IC4/IC5", msg)
 
     def test_passive_rules(self):
         from tfdiag import netlist

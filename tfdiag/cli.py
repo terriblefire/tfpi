@@ -22,6 +22,7 @@ diagex_body.bin and diag_manifest.json.
 import argparse
 import json
 import sys
+import time
 import traceback
 from pathlib import Path
 
@@ -187,6 +188,41 @@ def cmd_run(cfg, hw, ev, args):
     return 1 if short or not restored["ok"] else 0
 
 
+def cmd_identify(cfg, hw, ev, args):
+    """Which firmware is on the board (the main page's Verify button): the snapshot (a314d
+    stopped, Amiga held in reset, SPI flash and CPLD read back, boot ROM stamp, known
+    releases), then restore and check. No tests. Writes before.json, restore.json and
+    firmware.json ({"firmware", "verdict", "restore_ok", "time"})."""
+    from . import fwid
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    if S.read_json(cfg.marker) is not None:
+        raise S.MarkerExists("a previous diagnostic has not been restored yet (marker present): "
+                             "run `tfdiag restore` or `tfdiag recover` first")
+    before = {}
+    try:
+        with S.signals_raise():
+            before = S.snapshot(cfg, hw, ev, out=out / "before.json", images=args.images)
+    except S.Interrupted as e:
+        ev.warn(f"interrupted ({e}): restoring")
+        ev.result("interrupted", "incomplete", f"stopped early ({e})")
+    finally:
+        restored = S.restore(cfg, hw, ev, out=out / "restore.json")
+    fw = before.get("firmware") or {}
+    verdict = fwid.verdict(fw)
+    S.write_json(out / "firmware.json", {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "firmware": fw,
+                                         "verdict": verdict, "restore_ok": restored["ok"],
+                                         "restore_advice": restored.get("advice")})
+    for chip in ("fpga", "cpld"):
+        v = verdict.get(chip) or {}
+        ev.result(f"verify_{chip}", "incomplete" if v.get("state") == "not read" else "info",
+                  ("RAM FPGA: " if chip == "fpga" else "BUS CPLD: ") + (v.get("detail") or ""), step="verify")
+    ok = restored["ok"] and all((verdict.get(c) or {}).get("state") != "not read" for c in ("fpga", "cpld"))
+    ev.done(ok, restored["advice"] if not restored["ok"] else "firmware read back", restore_ok=restored["ok"],
+            verdict=verdict)
+    return 0 if ok else 1
+
+
 def cmd_report(cfg, hw, ev, args):
     from . import report
     r = report.write(Path(args.dir), ev, machine=args.machine)
@@ -207,6 +243,36 @@ def cmd_bundle(cfg, hw, ev, args):
     from . import bundle
     contents = bundle.make(Path(args.dir), Path(args.out))
     ev.done(True, f"{len(contents)} files", file=str(args.out), contents=contents)
+    return 0
+
+
+def cmd_fwid(cfg, hw, ev, args):
+    """Firmware ids of release files (no hardware): match them against a dump's
+    before.json "firmware" section or firmware/cpld_readback.jed."""
+    from . import fwid
+    out = []
+    for f in args.jed or []:
+        ident, _ = fwid.fuse_ident(Path(f).read_bytes())
+        out.append({"file": str(f), "kind": "cpld", **ident})
+    for f in args.image or []:
+        ident = fwid.flash_ident(Path(f).read_bytes())
+        out.append({"file": str(f), "kind": "fpga", **ident})
+    if args.catalog:
+        if not args.name:
+            raise Usage("--catalog needs --name (the release name)")
+        cat = Path(args.catalog)
+        data = json.loads(cat.read_text()) if cat.exists() else {"releases": []}
+        image = Path(args.image[0]).read_bytes() if args.image else None
+        jeds = [(Path(j).name, Path(j).read_bytes()) for j in args.jed or []]
+        entry = fwid.catalog_entry(args.name, image, jeds, git=args.git, date=args.date)
+        data["releases"] = [r for r in data["releases"] if r.get("name") != args.name] + [entry]
+        cat.write_text(json.dumps(data, indent=1) + "\n")
+        ev.info(f"{cat}: {args.name} added ({len(data['releases'])} releases)")
+    for o in out:
+        ev.result("fwid", "info", f"{o['file']}: " + (f"fuses {o['fuse_sha256']}" if o["kind"] == "cpld" else
+                  f"bitstream {o['bitstream_sha256']}, image {o.get('image_sha256')}, "
+                  f"SPI ROM git {o.get('spirom_git')}"), **o)
+    ev.done(True, f"{len(out)} file(s)")
     return 0
 
 
@@ -243,6 +309,9 @@ def build_parser():
         p = sub.add_parser(name)
         p.add_argument("--before", type=Path)
         p.add_argument("--out", type=Path)
+    p = sub.add_parser("identify", help="read back which firmware is on the board (no tests), then restore")
+    p.add_argument("--images", type=Path, help="diag images (default: config images): hold the Amiga in reset")
+    p.add_argument("--out", required=True, type=Path)
     p = sub.add_parser("report")
     p.add_argument("--dir", required=True, type=Path)
     p.add_argument("--machine", choices=["A3000", "A4000", "A4000T"],
@@ -253,12 +322,19 @@ def build_parser():
     p = sub.add_parser("bundle")
     p.add_argument("--dir", required=True, type=Path)
     p.add_argument("--out", required=True, type=Path)
+    p = sub.add_parser("fwid", help="firmware ids of release JED / flash image files (no hardware)")
+    p.add_argument("--jed", nargs="*", type=Path, help="CPLD JED files: fuse map sha256")
+    p.add_argument("--image", nargs="*", type=Path, help="RAM FPGA flash images: bitstream/image sha256")
+    p.add_argument("--catalog", type=Path, help="add the files as one release to this known_firmware.json")
+    p.add_argument("--name", help="release name for --catalog (e.g. tf4060r5_2026-11-05_f555529)")
+    p.add_argument("--git", help="source commit for --catalog (default: the SPI ROM stamp)")
+    p.add_argument("--date", help="build date for --catalog")
     return ap
 
 
 COMMANDS = {"snapshot": cmd_snapshot, "board": cmd_board, "timing": cmd_timing, "restore": cmd_restore,
-            "recover": cmd_recover, "run": cmd_run, "report": cmd_report, "bundle": cmd_bundle, "vcd-svg": cmd_vcd_svg, "vcd-png": cmd_vcd_svg}
-NO_HARDWARE = {"report", "bundle", "vcd-svg", "vcd-png"}
+            "recover": cmd_recover, "run": cmd_run, "report": cmd_report, "bundle": cmd_bundle, "fwid": cmd_fwid, "identify": cmd_identify, "vcd-svg": cmd_vcd_svg, "vcd-png": cmd_vcd_svg}
+NO_HARDWARE = {"report", "bundle", "vcd-svg", "vcd-png", "fwid"}
 
 
 def main(argv=None, hw_factory=None, stream=None, cfg=None):
@@ -277,6 +353,8 @@ def main(argv=None, hw_factory=None, stream=None, cfg=None):
         with S.locks(cfg):
             if args.cmd == "run":
                 return cmd_run(cfg, hw, ev, args)
+            if args.cmd == "identify":
+                return cmd_identify(cfg, hw, ev, args)
             with S.signals_raise():
                 return COMMANDS[args.cmd](cfg, hw, ev, args)
     except (Usage, S.LockError, S.MarkerExists) as e:

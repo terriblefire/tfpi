@@ -18,6 +18,9 @@ from pathlib import Path
 
 from . import __version__
 from . import amiga
+from .board import EXPERIMENTAL as BOARD_EXPERIMENTAL
+from . import fwid
+from . import zorro
 from . import protocol as P
 from . import timing as T
 
@@ -258,12 +261,32 @@ def rows_for(data, machine_override=None):
             "How fast the TF card ends the 060's cycle after the Amiga's DSACK.")
     _hist_rows(add, "TF card bus interface", hist, presets, "all", lambda m: m in TF_MEAS)
 
+    # ---- expansion boards (autoconfig chain, exerciser body 3) ------------------------------
+    zb = tm.get("expansion_boards") if tm else None
+    if zb:
+        for b in zb["boards"]:
+            add("Expansion boards", f"board {b['index'] + 1}", zorro.describe(b), "", "info",
+                f"Autoconfig ROM: er_Type {b['er_type']}, er_Flags {b['er_flags']}, InitDiagVec {b['diag_vec']}.")
+        end = zb.get("end")
+        if end:
+            add("Expansion boards", "Autoconfig chain", f"{len(zb['boards'])} board(s); {end['reason_text']}", "",
+                "info" if end["reason"] == 0 else "finding",
+                "Read by the exerciser before Kickstart could run (Zorro III space, then Zorro II), each board "
+                "shut up after it was read. The TF card's own autoconfig is off in the diag image."
+                + (f" Bus errors reading the config space: Zorro III {end['z3_bus_errors']}, "
+                   f"Zorro II {end['z2_bus_errors']}." if end["z3_bus_errors"] or end["z2_bus_errors"] else ""))
+        else:
+            add("Expansion boards", "Autoconfig chain", f"{len(zb['boards'])} board(s) before the walk stopped",
+                "", "incomplete", "The board walk did not finish (see the exerciser hangs).")
+
     # ---- exerciser -------------------------------------------------------------------------
     for h in tm.get("hangs", []):
         add("Exerciser", f"preset {h['preset']}: hang in {h.get('group', h['phase'])}", h.get("why", "hang"),
             "", "finding", "The Amiga stopped at this clock preset; it was reset and the run resumed at "
             "the next preset.")
     for r in tm.get("results", []):
+        if not r.get("failure", True) and r.get("test") in (zorro.BOARD, zorro.CONFIGURED, zorro.END):
+            continue                                        # listed under "Expansion boards"
         if not r.get("failure", True):
             add("Exerciser", f"preset {r['preset']}: {r['group']}", f"{r['flags']} {r['addr']} {r['got']}", "",
                 "info", "Exerciser note (not a failure).")
@@ -275,35 +298,49 @@ def rows_for(data, machine_override=None):
         add("Exerciser", "data read back", "as written", "", "info",
             "No different data read back in the tests that ran" + (" (see the hangs above)." if tm.get("hangs") else "."))
 
-    # ---- board test ------------------------------------------------------------------------
+    # ---- board test (experimental) -----------------------------------------------------------
     bd = data.get("board") or {}
     ch = bd.get("chain") or {}
+    if bd:
+        add(BOARD_SECTION, "Experimental", "not an indication of a real fault", "", "info", BOARD_EXPERIMENTAL)
     if ch:
-        add("Board", "JTAG IDCODE", ch.get("idcode"), "XC95288XL", "info" if ch.get("idcode_ok") else "finding",
+        add(BOARD_SECTION, "JTAG IDCODE", ch.get("idcode"), "XC95288XL", "info" if ch.get("idcode_ok") else "finding",
             "What the CPLD answers on the JTAG chain.")
         if "bypass_ok" in ch:
-            add("Board", "JTAG BYPASS", "1 bit" if ch["bypass_ok"] else "not 1 bit", "1 bit", "info" if ch["bypass_ok"]
+            add(BOARD_SECTION, "JTAG BYPASS", "1 bit" if ch["bypass_ok"] else "not 1 bit", "1 bit", "info" if ch["bypass_ok"]
                 else "finding", "TDI to TDO path through the CPLD.")
         if "boundary_length" in ch:
-            add("Board", "Boundary register", ch["boundary_length"], 864, "info" if ch["boundary_length"] == 864
+            add(BOARD_SECTION, "Boundary register", ch["boundary_length"], 864, "info" if ch["boundary_length"] == 864
                 else "finding", "Length of the CPLD boundary-scan register.")
     ex = bd.get("extest") or {}
     for n in ex.get("nets", []):
         if n["status"] != "info":
-            add("Board", f"net {n['name']}", "seen", "drives 0/1, nobody follows", n["status"], n["msg"])
+            add(BOARD_SECTION, f"net {n['name']}", "seen", "drives 0/1, nobody follows", n["status"], n["msg"])
     if ex.get("nets"):
         plain = sum(1 for n in ex["nets"] if n["status"] == "info")
-        add("Board", "Interconnect", f"{plain}/{len(ex['nets'])} nets follow 0/1 with nothing else following",
+        add(BOARD_SECTION, "Interconnect", f"{plain}/{len(ex['nets'])} nets follow 0/1 with nothing else following",
             "", "info", "Nets driven by the CPLD in EXTEST and read back by the CPLD and the FPGA.")
     if bd.get("skipped"):
-        add("Board", "Nets not driven", len(bd["skipped"]), "", "info",
+        add(BOARD_SECTION, "Nets not driven", len(bd["skipped"]), "", "info",
             "Nets with another driver (Amiga slot, bus switches, buffers) are only observed.")
 
     # ---- TF card identity / build ---------------------------------------------------------------
     b = data.get("before") or {}
     if b:
         add("TF card", "CPLD IDCODE / usercode", f"{b.get('cpld_idcode')} / {b.get('cpld_usercode')}", "", "info"
-            if b.get("cpld_idcode") else "incomplete", "The BUS CPLD on JTAG; the usercode names its design.")
+            if b.get("cpld_idcode") else "incomplete",
+            "The BUS CPLD on JTAG. The usercode is the same for every build; the design is identified below.")
+        fw = b.get("firmware")
+        if fw:
+            fs, cs = fwid.summary(fw)
+            add("TF card", "RAM FPGA firmware", fs or "not read", "", "info" if fs else "incomplete",
+                "Read back from the SPI flash: the SPI ROM build stamp, the bitstream and whole-image "
+                "checksums, the stored release it matches, and whether tfpi's record of what it flashed "
+                "still matches. The bitstream is in firmware/fpga_bitstream.bin.")
+            ok = bool((fw.get("cpld") or {}).get("fuse_sha256"))
+            add("TF card", "BUS CPLD firmware", cs or "not read", "", "info" if ok else "incomplete",
+                "The CPLD's fuse map read back over JTAG (read only, Amiga held in reset) and its checksum, "
+                "matched against the stored releases. The readback is in firmware/cpld_readback.jed.")
         add("TF card", "SPI flash", f"{b.get('flash_jedec')} sha256 {(b.get('flash_sha256') or '')[:16]}", "",
             "info" if b.get("flash_jedec") else "incomplete", "The FPGA's flash and a checksum of the installed image.")
     did = tm.get("diag_id")
@@ -351,13 +388,21 @@ def _hist_svg(bins):
 
 
 NOTE = ("Measurements only: nothing here is judged good or bad on the Pi. Send the zip to us; "
-        "\"finding\" rows are what the board test or the exerciser saw.")
+        "\"finding\" rows are what the board test or the exerciser saw. " + BOARD_EXPERIMENTAL)
+BOARD_SECTION = "Board test (experimental)"
+
+
+def _counts_text(meta):
+    c = meta["counts"]
+    exp = meta.get("board_findings", 0)
+    return (f"{c.get('finding', 0)} findings" + (f" ({exp} from the experimental board test)" if exp else "")
+            + f", {c.get('incomplete', 0)} incomplete")
 
 
 def to_text(rows, meta):
     counts = meta["counts"]
     out = [f"TF4060 diagnostics capture  ({meta['generated']}, tfdiag {__version__})", NOTE,
-           f"{counts.get('finding', 0)} findings, {counts.get('incomplete', 0)} incomplete", ""]
+           _counts_text(meta), ""]
     sec = None
     for s, name, val, lim, status, meaning in rows:
         if s != sec:
@@ -385,8 +430,7 @@ def to_html(rows, meta, data):
         ".m{color:var(--mut);font-size:12px}svg.h rect{fill:currentColor}.wrap{overflow-x:auto}",
         "</style></head><body>",
         f"<h1>TF4060 diagnostics capture</h1><p class='m'>{esc(meta['generated'])} &middot; tfdiag {__version__} &middot; "
-        f"<span class='finding'>{counts.get('finding', 0)} findings</span>, "
-        f"<span class='incomplete'>{counts.get('incomplete', 0)} incomplete</span></p><p>{esc(NOTE)}</p>",
+        f"<span class='finding'>{esc(_counts_text(meta))}</span></p><p>{esc(NOTE)}</p>",
     ]
     sec = None
     for s, name, val, lim, status, meaning in rows:
@@ -444,7 +488,8 @@ def write(d, events=None, machine=None):
     counts = {}
     for r in rows:
         counts[r[4]] = counts.get(r[4], 0) + 1
-    meta = {"generated": time.strftime("%Y-%m-%d %H:%M:%S"), "counts": counts}
+    meta = {"generated": time.strftime("%Y-%m-%d %H:%M:%S"), "counts": counts,
+            "board_findings": sum(1 for r in rows if r[0] == BOARD_SECTION and r[4] == "finding")}
     (d / "report.txt").write_text(to_text(rows, meta))
     (d / "report.html").write_text(to_html(rows, meta, data))
     if events:

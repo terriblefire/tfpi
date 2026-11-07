@@ -452,7 +452,9 @@ class Cpld:
             rec["msg"] = "; ".join(msgs) or "drives 0 and 1, no other pin follows"
             nets.append(rec)
         float_levels = {e["ucf"]: g(base["cpld"], e) for _, e in named}
-        drift = [e["ucf"] for _, e in named if g(end["cpld"], e) != g(base["cpld"], e)]
+        # clock nets (PCLK runs on purpose in the pin readback image) always read differently
+        drift = [e["ucf"] for _, e in named if g(end["cpld"], e) != g(base["cpld"], e)
+                 and e["ucf"] not in un["clocks"]]
         order = {e["ucf"]: int(p) for p, e in named}
         return {"nets": nets, "findings": findings, "float": float_levels, "float_changed": drift,
                 "unstable": sorted(un["cpld"] - un["clocks"], key=lambda n: order.get(n, 0)),

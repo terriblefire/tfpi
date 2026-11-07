@@ -15,7 +15,7 @@
 <tr><th>Started</th><td>{{ run.started or "-" }}</td></tr>
 {% if run.images_build %}<tr><th>Diagnostic images</th><td class="mono">build {{ run.images_build }}</td></tr>{% endif %}
 {% for step, value in outcome.steps.items() %}
-<tr><th>{{ names.get(step, step) }}</th><td>{{ value.state }}{% if value.findings %} · {{ value.findings }} finding{{ "s" if value.findings != 1 }} noted (see the report below){% endif %}</td></tr>
+<tr><th>{{ names.get(step, step) }}</th><td>{{ value.state }}{% if value.findings %} · {{ value.findings }} finding{{ "s" if value.findings != 1 }} noted (see the report below){% if step == "board" %}<br><span class="muted">Experimental: not an indication of a real fault.</span>{% endif %}{% endif %}</td></tr>
 {% endfor %}
 </table>
 {% if "board" in outcome.steps %}<p class="warn">After a board test, power-cycle the Amiga before you use it.</p>{% endif %}
