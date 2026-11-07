@@ -61,13 +61,20 @@ fi
 echo "Pi user: $A314_USER"
 
 # --- Packages ---------------------------------------------------------------
+# installable PKG: apt has a version to install. `apt-cache show` is not enough: on
+# Trixie python3-distutils is only referred to by other packages, `show` succeeds and
+# apt-get install then fails ("has no installation candidate").
+installable() {
+	cand=$(apt-cache policy "$1" 2>/dev/null | awk '/Candidate:/ {print $2; exit}')
+	[ -n "$cand" ] && [ "$cand" != "(none)" ]
+}
 apt-get update
 PKGS="git ca-certificates curl build-essential cmake pkg-config
       libusb-dev libftdi1-dev libgpiod-dev
       device-tree-compiler python3-dev python3-pip python3-virtualenv ifupdown iptables
       python3-flask python3-waitress unzip fpga-icestorm"
 for optional in libftdi-dev python3-distutils; do
-	if apt-cache show "$optional" >/dev/null 2>&1; then PKGS="$PKGS $optional"; fi
+	if installable "$optional"; then PKGS="$PKGS $optional"; fi
 done
 # shellcheck disable=SC2086
 apt-get install -y --no-install-recommends $PKGS
@@ -204,7 +211,7 @@ systemctl restart tfpi-web.service
 # above; /opt/tfpi/diag is tfdiag's default image folder for command-line use.
 [ -e "$PREFIX/diag" ] && [ ! -L "$PREFIX/diag" ] || ln -sfn "$PREFIX/lib/tfpi/diag_images" "$PREFIX/diag"
 diag_pkgs=openocd
-apt-cache show python3-spidev >/dev/null 2>&1 && diag_pkgs="$diag_pkgs python3-spidev"
+installable python3-spidev && diag_pkgs="$diag_pkgs python3-spidev"
 # shellcheck disable=SC2086
 apt-get install -y --no-install-recommends $diag_pkgs \
 	|| echo "WARNING: could not install $diag_pkgs; the Diagnostics board test needs openocd"
