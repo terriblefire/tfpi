@@ -53,6 +53,8 @@ WARNING = ("This page is for diagnostic capture only. Tests temporarily load dia
            "and will reset your Amiga. Save your work first. When the tests finish, the machine "
            "is returned to its original state.")
 WARNING_POWER = "Do not power off during a test."
+WARNING_SCREEN = ("During the tests the Amiga's screen will go blank and may change colour. "
+                  "This is normal.")
 WARNING_FIRST_STEP = ("The first step stops a314d (the Amiga loses PI0: and the other a314 services) and "
                       "reads the FPGA's flash with the FPGA held in reset: the Amiga crashes or resets at "
                       "that moment, before any test runs.")
@@ -60,7 +62,10 @@ DONE_MESSAGE = "Capture complete - download the zip and send it to us"
 WHAT_TO_DO = ("Power-cycle the Amiga (the Pi restarts with it). If the main TF Pi page still shows "
               "a problem afterwards, reflash the firmware from the main TF Pi page.")
 ACTIONS = ("board", "timing")
-ACTION_NAMES = {"board": "Board test", "timing": "Timing capture"}
+ACTION_NAMES = {"board": "Board test (experimental)", "timing": "Timing capture"}
+# the JTAG soldering check can report spurious faults (tfdiag/board.py)
+BOARD_EXPERIMENTAL = ("The board test (JTAG soldering check) is experimental: it can report spurious "
+                      "faults, and its findings should not be taken as an indication of a real fault.")
 DIAG_IMAGES = ("diag_timing.bin", "diag_pins.bin", "diagex_body.bin")
 KEEP_RUNS = 10
 HANDLE_MAX, NOTE_MAX = 64, 2000
@@ -561,11 +566,34 @@ def board_findings(rundir, limit=5):
                                             "where": f.get("where", "")} for f in found[:limit]]}
 
 
+def firmware_on_board(rundir):
+    """{"fpga": text, "cpld": text} from before.json's firmware ids (tfdiag fwid), or None."""
+    from tfdiag import fwid
+    fw = _read(Path(rundir) / "before.json").get("firmware")
+    if not isinstance(fw, dict):
+        return None
+    fpga, cpld = fwid.summary(fw)
+    return {"fpga": fpga, "cpld": cpld}
+
+
+def expansion_boards(rundir):
+    """{"boards": [text], "end": text, "complete": bool} from timing.json, or None."""
+    from tfdiag import zorro
+    zb = _read(Path(rundir) / "timing" / "timing.json").get("expansion_boards")
+    if not isinstance(zb, dict):
+        return None
+    end = zb.get("end")
+    return {"boards": [zorro.describe(b) for b in zb.get("boards") or []],
+            "end": end["reason_text"] if end else "the walk did not finish", "complete": bool(end)}
+
+
 def page_summary(rundir, info=None):
     """Everything the result page shows above the report; each part fails on its own."""
     out = {}
     for key, part in (("bus", lambda: bus_cycles(rundir, info)), ("waves", lambda: waves_by_region(rundir)),
-                      ("clocks", lambda: clock_checks(rundir)), ("findings", lambda: board_findings(rundir))):
+                      ("clocks", lambda: clock_checks(rundir)), ("findings", lambda: board_findings(rundir)),
+                      ("firmware", lambda: firmware_on_board(rundir)),
+                      ("boards", lambda: expansion_boards(rundir))):
         try:
             out[key] = part()
         except Exception as error:      # odd or partial results: show the rest
@@ -719,6 +747,82 @@ def run(job, actions, preset_ids=None, test_mask=None, result_path=None):
     return 0 if outcome["ok"] else 1
 
 
+# --- Verify (main page): which firmware is on the board -------------------------------------
+
+VERIFY_WARNING = ("Verify reads the FPGA's flash and the CPLD back from the chips. a314d is stopped "
+                  "and the Amiga is held in reset while it reads (about half a minute), then restarted: "
+                  "save your work first. Nothing is written.")
+
+
+def verify_file():
+    return config.STATE_DIR / "verify.json"
+
+
+def last_verify():
+    data = config.read_json(verify_file(), None)
+    return data if isinstance(data, dict) else None
+
+
+def verify(job, result_path=None):
+    """tfdiag identify, under the same locks and power-loss marker as a diagnostic."""
+    outcome = {"ok": False, "kind": "verify", "job": None, "result": None}
+    with ExitStack() as stack:
+        try:
+            _locks(stack)
+            if marker_file().exists() or current_file().exists():
+                raise DiagError("an earlier test was not restored; run the restore check on the Diagnostics tab first")
+            status = images_status()
+            if not status["ok"]:
+                raise DiagError(status["reason"])
+        except DiagError as error:
+            say(f"not started: {error}")
+            outcome["result"] = f"not started: {error}"
+            finish(result_path, outcome)
+            return 2
+        rundir = config.STATE_DIR / "verify" / job
+        rundir.mkdir(parents=True, exist_ok=True)
+        config.write_json(current_file(), {"job": job, "rundir": str(rundir), "pid": os.getpid(),
+                                           "started": config.now(), "kind": "verify"})
+        os.sync()
+        runner = Runner(rundir)
+        say("reading the installed firmware back from the board")
+        rc, _ = runner.tool("identify", "--images", images_dir(), "--out", rundir)
+        runner.protect = True
+        fw = config.read_json(rundir / "firmware.json", None)
+        current_file().unlink(missing_ok=True)
+        if not isinstance(fw, dict):
+            outcome["result"] = f"the firmware could not be read back (tfdiag exit status {rc})"
+        else:
+            verdict = fw.get("verdict") or {}
+            record = {"time": fw.get("time") or config.now(), "job": job, "verdict": verdict,
+                      "restore_ok": bool(fw.get("restore_ok")), "advice": fw.get("restore_advice")}
+            config.write_json(verify_file(), record)
+            for chip, label in (("fpga", "RAM FPGA"), ("cpld", "BUS CPLD")):
+                say(f"{label}: {(verdict.get(chip) or {}).get('detail', 'not read')}")
+            if record["restore_ok"]:
+                say("Restored: OK")
+            else:
+                say("Restored: NOT OK" + (f": {record['advice']}" if record["advice"] else ""))
+                say("What to do: " + WHAT_TO_DO)
+            states = [(verdict.get(c) or {}).get("state") for c in ("fpga", "cpld")]
+            outcome["ok"] = record["restore_ok"] and "not read" not in states
+            outcome["result"] = ("; ".join(f"{n}: {s}" for n, s in zip(("RAM FPGA", "BUS CPLD"), states))
+                                 + ("" if record["restore_ok"] else "; NOT restored"))
+            outcome["verdict"] = verdict
+        prune_verify()
+        os.sync()
+    finish(result_path, outcome)
+    say(outcome["result"])
+    return 0 if outcome["ok"] else 1
+
+
+def prune_verify(keep=5):
+    d = config.STATE_DIR / "verify"
+    runs = sorted((p for p in d.iterdir() if p.is_dir()), key=lambda p: p.name) if d.is_dir() else []
+    for old in runs[:-keep]:
+        shutil.rmtree(old, ignore_errors=True)
+
+
 def recover(result_path=None, job=None):
     """After a power loss, or a job that died: restore + check, keep partial results."""
     record_ = current() or {}
@@ -790,6 +894,9 @@ def main(argv=None):
     rec = sub.add_parser("recover")
     rec.add_argument("--job")
     rec.add_argument("--result")
+    ver = sub.add_parser("verify")
+    ver.add_argument("--job", required=True)
+    ver.add_argument("--result")
     sub.add_parser("status")
     args = parser.parse_args(argv)
     if args.cmd == "status":
@@ -799,6 +906,8 @@ def main(argv=None):
         return 0
     if args.cmd == "recover":
         return recover(args.result, args.job)
+    if args.cmd == "verify":
+        return verify(args.job, args.result)
     actions = [a for a in args.actions.split(",") if a]
     if not actions or any(a not in ACTIONS for a in actions):
         parser.error(f"--actions: choose from {', '.join(ACTIONS)}")

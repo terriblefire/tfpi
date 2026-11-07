@@ -68,7 +68,8 @@ The page is meant for your home network only. Don't forward it to the internet.
 ## Diagnostics
 
 The **Diagnostics** tab captures how the board and the Amiga behave, for us to
-look at: a **board test** (CPLD JTAG chain, pin snapshot, clocks, CPLD↔FPGA
+look at: a **board test** (experimental: it can report spurious faults, so its
+findings are not an indication of a real fault; CPLD JTAG chain, pin snapshot, clocks, CPLD↔FPGA
 lines, SDRAM), a **timing capture** (bus timing histograms and waveforms while
 the 68060 exercises the Amiga, over the chosen CPU clock presets), or both
 (**Run all**), then it always restores and checks the machine. Nothing is
@@ -76,11 +77,23 @@ judged good or bad on the Pi: at the end, download the zip and send it to us.
 The one real check is the restore: **Restored: OK**, or in red what differs and
 what to do.
 
-- Nothing is written to the FPGA or CPLD flash: the diagnostic images are loaded
+- Nothing is written to the FPGA flash or the CPLD: the diagnostic images are loaded
   into the FPGA's SRAM, and a power cycle always brings the normal firmware back.
 - The tests reset the Amiga, and the first step (stopping a314d and reading the
   FPGA flash with the FPGA held in reset) crashes it. Save your work first, and
   don't power off during a test.
+- Every run records which firmware is really on the board, read back from the
+  chips (read only), not from what this Pi last flashed: the RAM FPGA flash
+  image (SPI ROM build stamp, bitstream and image checksums) and the BUS CPLD
+  fuse map (read with xc3sprog's read action while the Amiga is held in reset).
+  Both are matched against the releases this Pi keeps, and the zip carries
+  `firmware/fpga_bitstream.bin` and `firmware/cpld_readback.jed`.
+  `tfdiag fwid --jed FILE --image FILE` gives the same ids for any release.
+- The timing capture also lists the expansion boards: before Kickstart can run,
+  the exerciser walks the Zorro autoconfig chain (Zorro III, then Zorro II),
+  records each board's manufacturer, product, serial and size, and shuts it up
+  (or, if it can't be shut up, configures it) so the next one shows. The
+  boards go back to normal at the reset that ends the test.
 - The `tfdiag` tool (`tfdiag/`) and the diagnostic images (`tfpi/diag_images/`,
   with `diag_manifest.json`) are part of tfpi and install with it.
 - One job at a time: no flash or update can start during a test, and no test

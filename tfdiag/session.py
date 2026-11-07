@@ -23,7 +23,9 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
+from . import cpldread
 from . import fpga as F
+from . import fwid
 from . import jtag as J
 from . import tools
 from .hooks import checkpoint
@@ -214,11 +216,91 @@ class Hw:
 
 
 # ---- before / after ---------------------------------------------------------------------
-def read_flash(hw):
+def read_flash(hw, ident=False):
+    """JEDEC id + checksum of the SPI flash (read only). ident=True also returns the
+    firmware id of the image (fwid.flash_ident) under "_fpga_ident" and the bitstream
+    bytes under "_bitstream"."""
     jedec = hw.fpga.jedec_id()
-    ck = hw.fpga.flash_checksum() if jedec else None
-    return {"flash_jedec": jedec, "flash_sha256": ck and ck["sha256"], "flash_bytes": ck and ck["bytes"],
-            "flash_bitstream": ck and ck["bitstream"]}
+    ck = hw.fpga.flash_checksum(jedec=jedec, keep=ident) if jedec else None
+    out = {"flash_jedec": jedec, "flash_sha256": ck and ck["sha256"], "flash_bytes": ck and ck["bytes"],
+           "flash_bitstream": ck and ck["bitstream"]}
+    if ident and ck:
+        out["_fpga_ident"] = fwid.flash_ident(ck["data"])
+        out["_bitstream"] = fwid.bitstream_of(ck["data"])
+    return out
+
+
+def read_cpld(cfg, hw, ev):
+    """Fuse map of the BUS CPLD (read only, Amiga held in reset). Returns (ident, bits, text)."""
+    try:
+        text = cpldread.read_back(cfg, ev)
+        ident, bits = fwid.fuse_ident(text)
+    except (cpldread.CpldReadError, fwid.JedError) as e:
+        ev.warn(f"CPLD readback: {e}")
+        return {"error": str(e)}, None, None
+    idc, _ = hw.cpld_ids()
+    ident["idcode_after"] = idc
+    if idc is None:
+        ev.warn("the CPLD does not answer on JTAG after the readback")
+    return ident, bits, text
+
+
+def boot_rom_version(cfg, bitstream, ev):
+    """The FSBL's $VER build stamp from the bitstream's BRAM (iceunpack, then fwid), or None."""
+    d = Path(cfg.state_dir) / "diag-tmp"
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+        fd, binp = tempfile.mkstemp(prefix="tfdiag-bs-", suffix=".bin", dir=d)
+        os.close(fd)
+        ascp = binp[:-4] + ".asc"
+        try:
+            Path(binp).write_bytes(bitstream)
+            rc, _ = tools.run([cfg.iceunpack, binp, ascp], timeout=cfg.tool_timeout)
+            if rc or not Path(ascp).exists():
+                return None
+            return fwid.boot_rom_version(Path(ascp).read_text())
+        finally:
+            for f in (binp, ascp):
+                try:
+                    os.unlink(f)
+                except OSError:
+                    pass
+    except (OSError, tools.ToolError) as e:
+        ev.warn(f"boot ROM build stamp: {e}")
+        return None
+
+
+def firmware_ident(cfg, hw, ev, flash, held, out_dir=None):
+    """Which firmware is on the board: the flash image just read and, with the Amiga held
+    in reset, the CPLD fuse map; matched against the releases this Pi keeps. Writes
+    firmware/fpga_bitstream.bin and firmware/cpld_readback.jed next to before.json."""
+    fpga = flash.pop("_fpga_ident", None)
+    bitstream = flash.pop("_bitstream", None)
+    cpld, bits, text = {"error": "not read"}, None, None
+    if not cfg.cpld_readback:
+        cpld = {"error": "readback switched off (TFDIAG_CPLD_READBACK=0)"}
+    elif not held:
+        cpld = {"error": "the Amiga could not be held in reset, so the CPLD was not read"}
+    else:
+        ev.progress(85, "reading the CPLD design back (read only)")
+        cpld, bits, text = read_cpld(cfg, hw, ev)
+        checkpoint("snapshot.cpld_read")
+    if fpga is not None and bitstream:
+        fpga["boot_rom"] = boot_rom_version(cfg, bitstream, ev)
+    ident = fwid.identify(fpga, cpld, bits, fwid.known_releases(cfg.firmware_dir),
+                          fwid.tfpi_state(cfg.tfpi_state), fwid.load_catalog(cfg.known_firmware))
+    if out_dir:
+        d = Path(out_dir) / "firmware"
+        d.mkdir(parents=True, exist_ok=True)
+        if bitstream:
+            (d / "fpga_bitstream.bin").write_bytes(bitstream)
+        if text:
+            (d / "cpld_readback.jed").write_text(text)
+    fs, cs = fwid.summary(ident)
+    if fpga:
+        ev.result("firmware_fpga", "info", "RAM FPGA flash: " + fs, step="snapshot")
+    ev.result("firmware_cpld", "info" if bits else "incomplete", "BUS CPLD: " + cs, step="snapshot")
+    return ident
 
 
 def load_held(hw, images, usercode=None, ev=None):
@@ -252,7 +334,8 @@ def snapshot(cfg, hw, ev, out=None, images=None):
     Order (AmigaOS must not run between diagnostic steps): read-only JTAG ids and a314d state,
     marker, stop a314d, load diag_timing.bin + 0xA1 (the one unavoidable Amiga reset), then
     the flash id/checksum (fomu-flash holds the FPGA in reset while it reads), then
-    diag_timing.bin + 0xA1 again before anything else."""
+    diag_timing.bin + 0xA1 again before anything else, then (Amiga still held) the CPLD
+    fuse readback for the firmware id (before["firmware"], fwid.py)."""
     ev.step("snapshot", "recording the state before the test")
     if read_json(cfg.marker) is not None:
         raise MarkerExists("a previous diagnostic has not been restored yet (marker present): "
@@ -279,7 +362,8 @@ def snapshot(cfg, hw, ev, out=None, images=None):
         ev.progress(30, f"{held} loaded, Amiga held in reset")
         checkpoint("snapshot.held")
     ev.progress(40, "reading the SPI flash id and checksum (read only)")
-    before.update(read_flash(hw))
+    flash = read_flash(hw, ident=True)
+    before.update({k: v for k, v in flash.items() if not k.startswith("_")})
     checkpoint("snapshot.flash_read")
     if held:
         ev.progress(80, f"{held} again, Amiga held in reset")
@@ -290,6 +374,7 @@ def snapshot(cfg, hw, ev, out=None, images=None):
         r = hw.fpga.restore()
         before["cdone_after_snapshot"] = r["cdone"]
     before["held_after_snapshot"] = held
+    before["firmware"] = firmware_ident(cfg, hw, ev, flash, held, Path(out).parent if out else None)
     marker["before"] = before
     marker["stage"] = "snapshot-done"
     write_json(cfg.marker, marker)

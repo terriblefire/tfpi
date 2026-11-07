@@ -33,6 +33,8 @@ import sys
 from functools import lru_cache
 from pathlib import Path
 
+from .board import EXPERIMENTAL
+
 from . import netlist as NL
 
 DEFAULT = Path(__file__).resolve().parent / "data" / "r5_board.json"
@@ -227,9 +229,22 @@ def _board_findings(nl, bd):
                            [(CPLD, r["cpld_pin"])] if r.get("cpld_pin") else [], source="extest"))
     fc = ex.get("float_changed") or []
     if fc:
+        slot = [n for n in fc if any(part == "CN100" for part, _ in
+                                     nl.nets.get(resolve_net(nl, n), {}).get("members", []))]
+        note = (" The Amiga CPU-slot lines among them (" + ", ".join(map(str, slot[:24])) + ") are not driven "
+                "by the TF card here: the motherboard may leave them floating while the Amiga is held in reset."
+                if slot else "")
+        ide = [n for n in fc if any(part in ("IC4", "IC5") for part, _ in
+                                    nl.nets.get(resolve_net(nl, n), {}).get("members", []))]
+        if ide:
+            note += (" " + ", ".join(map(str, ide[:24])) + " also go through the IDE data buffers IC4/IC5, "
+                     "whose direction pin is IOR (FPGA pin 116). The board-test image holds IOR high, so the "
+                     "buffers cannot drive the data bus; a set of these data lines floating together can mean "
+                     "IOR is bad (open between FPGA pin 116 and IC4/IC5 pin 1, or a damaged buffer), letting "
+                     "IC4/IC5 drive them.")
         out.append(_mk(nl, "float", f"{len(fc)} pins read differently at the end of EXTEST",
                        "With every CPLD output off, these pins read differently at the end than at the start "
-                       "(floating inputs or a slow leak): " + ", ".join(map(str, fc[:24])),
+                       "(floating inputs or a slow leak): " + ", ".join(map(str, fc[:24])) + "." + note,
                        [resolve_net(nl, n) for n in fc[:24]], [p for n in fc[:24] for p in _cpld_pad(nl, n)],
                        source="extest"))
     return out
@@ -578,7 +593,7 @@ def _uid(payload):
     return "tfbv-" + hashlib.sha1(f"{next(_COUNTER)}:{payload}".encode()).hexdigest()[:8]
 
 
-def html_section(data, board=None, netlist=None, heading="Board view"):
+def html_section(data, board=None, netlist=None, heading="Board view (experimental)"):
     """The board view block for report.html, or "" when there are no board results and no
     findings to place. Never raises: a broken board view must not cost the report."""
     try:
@@ -591,7 +606,7 @@ def html_section(data, board=None, netlist=None, heading="Board view"):
         return f"<!-- board view not drawn: {html.escape(type(e).__name__)}: {html.escape(str(e))} -->"
 
 
-def _section(fs, board=None, heading="Board view"):
+def _section(fs, board=None, heading="Board view (experimental)"):
     esc = lambda x: html.escape("" if x is None else str(x))
     payload = json.dumps(fs, separators=(",", ":"), default=str).replace("</", "<\\/")
     uid = _uid(payload)
@@ -616,6 +631,7 @@ def _section(fs, board=None, heading="Board view"):
         f"<h2>{esc(heading)}</h2>",
         f"<p class='m'>TF4060 r5 board, seen from the top (bottom-side parts dashed). {placed} of {len(fs)} "
         f"findings placed on the board. Observations only, as above.{keys}</p>",
+        f"<p class='m'><b>{esc(EXPERIMENTAL)}</b></p>",
         "<div class='tfbv-bar'><button type='button' data-act='top' aria-pressed='true'>Top</button>"
         "<button type='button' data-act='bottom' aria-pressed='false'>Bottom</button>"
         "<button type='button' data-act='in' aria-label='zoom in'>+</button>"

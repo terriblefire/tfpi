@@ -1,8 +1,10 @@
 {% extends "base.html" %}{% block body %}
 {% set is_update = job.startswith("update-") %}
 {% set is_diag = job.startswith("diag") %}
-<div class="card"><h1>{{ "Updating the Pi software" if is_update else "Diagnostics" if is_diag else "Flashing" }} <span class="muted mono">{{ job }}</span></h1>
-{% if is_diag %}<p><b>{{ warning }}</b></p>{% endif %}
+{% set is_verify = job.startswith("verify-") %}
+<div class="card"><h1>{{ "Updating the Pi software" if is_update else "Diagnostics" if is_diag else "Verifying the firmware" if is_verify else "Flashing" }} <span class="muted mono">{{ job }}</span></h1>
+{% if is_diag %}<p><b>{{ warning }}</b></p><p>{{ warning_screen }}</p>{% endif %}
+{% if is_verify %}<p>{{ warning_screen }}</p>{% endif %}
 <p id="status" class="muted">Running… don't power off the Amiga or the Pi.{% if is_update %} This page reloads itself when the web service restarts during the update.{% endif %}</p>
 <pre class="log" id="log"></pre>
 {% if is_diag and not job.startswith("diagrecover-") %}<form id="abort" method="post" action="/diag/abort/{{ job }}" onsubmit="return confirm('Stop the test? The machine is still restored to its original state.')"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary">Abort test</button></form>{% endif %}

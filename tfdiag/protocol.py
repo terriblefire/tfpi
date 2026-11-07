@@ -108,7 +108,7 @@ SPI_SLOW_HZ = 2_000_000      # every transfer made while phase is 0x0001 or a sw
 # The manifest can still say "exerciser_hold": false.
 HOLD_MIN_VERSION = 2
 # phases during which a hold request is not acted on (cannot be interrupted)
-NO_HOLD_PHASES = {0x0001, 0x0003}
+NO_HOLD_PHASES = {0x0001, 0x0003, 0x0004}
 FLAG_APPEND = 1
 MAGIC_RUNNING = b"TFDX"
 MAGIC_GO = b"TFGO"
@@ -127,7 +127,9 @@ STUB_STAGES = {PH_STUB: "stub entered", PH_WAIT: "waiting for TFGO and a valid b
                PH_STUBEXC: "the stub took an exception (halted)"}
 # test groups (MB_PHASE values and the low byte of a result's test field)
 CLOCK_SWITCH_TEST = 0x01       # info entry per switch: addr = preset, expected = polls, got = bus errors
-GROUPS = {0x01: "clock switch", 0x02: "CPU clock measurement", 0x03: "machine ID", 0x10: "chip RAM",
+GROUPS = {0x01: "clock switch", 0x02: "CPU clock measurement", 0x03: "machine ID",
+          0x04: "expansion boards", 0x05: "expansion board configured", 0x06: "expansion board chain end",
+          0x10: "chip RAM",
           0x14: "TAS/CAS", 0x30: "motherboard fast RAM", 0x40: "custom registers", 0x50: "CIA registers",
           0x58: "CIA timer interrupts", 0x60: "ROM reads", 0x68: "motherboard chip registers"}
 # (the SDMAC/SCSI DMA test, ids 0x70-0x73, was removed from the exerciser)
@@ -330,7 +332,11 @@ PINREAD_LEN = 14
 PINREAD_HZ = 1_000_000
 # pins diag_pins.bin drives (their bits read the pad back, not the board): RESET held low
 # (keeps the 060 in reset through IC10), PCLK and CLKCPU 25 MHz, CLKEN low
-PINREAD_DRIVEN = {"117", "93", "85", "128"}
+# RESET, PCLK, CLKEN, CLKCPU; and the IDE strobes/selects parked high (IOR 116, IOW 115,
+# IDECS 114/113: IOR is DIR of the IC4/IC5 data buffers, which must not drive D16-D31)
+PINREAD_DRIVEN = {"117", "93", "85", "128", "116", "115", "114", "113"}
+# pins the image holds high (IDE parked), with what a low readback means
+PINREAD_PARKED_HIGH = {"116": "IOR", "115": "IOW", "114": "IDECS1", "113": "IDECS0"}
 PINREAD_ORDER = [
     "105", "135", "39", "41", "45", "47", "48", "55", "56", "60", "62", "63", "104", "102",
     "101", "99", "98", "97", "96", "95", "94", "91", "90", "88", "87", "84", "82", "81",

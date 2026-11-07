@@ -16,6 +16,9 @@ The FPGA is left with diag_pins.bin loaded: restore brings the flash image back.
 import json
 from pathlib import Path
 
+EXPERIMENTAL = ("The board test (JTAG soldering check) is experimental: it can report spurious faults, "
+                "and its findings should not be taken as an indication of a real fault.")
+
 from . import jtag as J
 from .hooks import checkpoint
 
@@ -75,6 +78,16 @@ def run_board(cpld, spi, fpga, events, out_dir, images, info=None, extra_dnd=())
     first = fread()
     if first is None:
         ev.result("pinread", "incomplete", "the pin readback image does not answer: FPGA pins not checked")
+    else:
+        from . import protocol as P
+        for pin, name in sorted(P.PINREAD_PARKED_HIGH.items()):
+            if first.get(pin) == 0:
+                ev.result(f"parked_{name}", "finding",
+                          f"{name} (FPGA pin {pin}) reads low while the board-test image drives it high: "
+                          "shorted to ground or to a driver"
+                          + (". IOR is the direction pin of the IDE data buffers IC4/IC5: if it can't go "
+                             "high they may drive D16-D31" if name == "IOR" else ""), step="pins")
+        res["parked_readback"] = {name: first.get(pin) for pin, name in P.PINREAD_PARKED_HIGH.items()}
     rows = cpld.sample(8)
     rsti = [cpld.level(v, "CPU_RSTI") for v in rows]
     in_reset = all(x == 0 for x in rsti)

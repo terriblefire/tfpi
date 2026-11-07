@@ -93,6 +93,20 @@ if cmd == "run":
     ev(event="done", ok=ok and not incomplete, summary="capture complete", restore_ok=ok,
        complete=not incomplete)
     sys.exit(0 if ok and not incomplete else 1)
+elif cmd == "identify":
+    out = Path(opt("--out"))
+    out.mkdir(parents=True, exist_ok=True)
+    marker.write_text("{}")
+    ev(event="step", step="snapshot", msg="recording the state before the test")
+    ok = restore(out / "restore.json")
+    verdict = {"fpga": {"state": "unknown", "git": "beef123", "built": "2026-11-06",
+                        "detail": "not a known release: built from git beef123 on 2026-11-06 (boot ROM)"},
+               "cpld": {"state": "known", "release": "tf4060r5_2026-11-05_f555529",
+                        "detail": "design of release tf4060r5_2026-11-05_f555529"}}
+    (out / "firmware.json").write_text(json.dumps({"time": "2026-11-07 11:00:00", "firmware": {},
+                                                   "verdict": verdict, "restore_ok": ok}))
+    ev(event="done", ok=ok, summary="firmware read back", restore_ok=ok, verdict=verdict)
+    sys.exit(0 if ok else 1)
 elif cmd == "recover":
     ok = restore(Path(opt("--out")))
     ev(event="done", ok=ok, summary="recovered" if ok else "not restored")
@@ -173,17 +187,52 @@ class DiagWebBase(DiagBase):
         self.fail("diag never started")
 
 
+class VerifyTests(DiagWebBase):
+    def test_verify_button_reads_back_and_shows_the_result(self):
+        page = self.client.get("/").get_data(as_text=True)
+        self.assertIn('action="/verify"', page)
+        self.assertIn("Verify reads the FPGA&#39;s flash and the CPLD back from the chips", page)
+        reply = self.client.post("/verify", data={"csrf": self.csrf()})
+        job = reply.headers["Location"].rsplit("/", 1)[1]
+        self.assertTrue(job.startswith("verify-"))
+        self.assertIn("Verifying the firmware", self.client.get(f"/job/{job}").get_data(as_text=True))
+        done = self.wait(job)
+        self.assertTrue(done["result"]["ok"], done)
+        self.assertEqual(done["result"]["kind"], "verify")
+        self.assertIn("identify", self.calls())
+        self.assertFalse(diag.marker_file().exists())
+        self.assertFalse(diag.current_file().exists())
+        page = self.client.get("/").get_data(as_text=True)
+        self.assertIn("built from git beef123 on 2026-11-06", page)
+        self.assertIn("tf4060r5_2026-11-05_f555529", page)
+        self.assertIn("Verified</th><td>2026-11-07 11:00:00", page)
+
+    def test_verify_refused_while_a_test_is_pending(self):
+        diag.marker_file().parent.mkdir(parents=True, exist_ok=True)
+        diag.marker_file().write_text("{}")
+        reply = self.client.post("/verify", data={"csrf": self.csrf()})
+        self.assertEqual(reply.headers["Location"], "/")
+        self.assertNotIn("identify", self.calls())
+
+
 class TabTests(DiagWebBase):
     def test_tab_renders_with_warning(self):
         page = self.client.get("/diag").get_data(as_text=True)
         self.assertIn(diag.WARNING, page)
         self.assertIn("Do not power off during a test.", page)
+        self.assertIn("screen will go blank and may change colour. This is normal.", page)
+        self.assertIn("<b>Board test (experimental)</b>", page)
+        self.assertIn(diag.BOARD_EXPERIMENTAL, page)
         self.assertIn('href="/diag">Diagnostics</a>', page)
         self.assertIn("Run all", page)
         self.assertIn("build <span class=\"mono\">abc1234", page)
         self.assertIn("5: 75 MHz (half bus)", page)           # presets from the manifest
         self.assertIn("mbram", page)                          # tests from tfdiag's exerciser bits
         self.assertNotIn("Tests can", page)
+
+    def test_board_experimental_matches_tfdiag(self):
+        from tfdiag import board
+        self.assertEqual(diag.BOARD_EXPERIMENTAL, board.EXPERIMENTAL)
 
     def test_warning_text_is_exact(self):
         self.assertEqual(diag.WARNING, "This page is for diagnostic capture only. Tests temporarily load "
@@ -209,6 +258,7 @@ class TabTests(DiagWebBase):
         self.assertIn(diag.WARNING, page)
         self.assertIn("Do not power off during a test.", page)
         self.assertIn("the Amiga crashes or resets at that moment", page)
+        self.assertIn("screen will go blank and may change colour", page)
         self.assertIn("62.5 MHz (half bus)", page)
         self.assertIn('name="tests" value="0x00000001"', page)
         self.assertIn("Discord / forum handle (optional)", page)
@@ -509,7 +559,8 @@ class ResultSummaryTests(DiagWebBase):
         fs = diag.board_findings(rundir)
         self.assertGreaterEqual(fs["count"], 1)
         page = self.client.get(f"/diag/result/{job}").get_data(as_text=True)
-        self.assertIn("<h2>Board test findings</h2>", page)
+        self.assertIn("<h2>Board test findings (experimental)</h2>", page)
+        self.assertIn("should not be taken as an indication of a real fault", page)
         self.assertIn(fs["first"][0]["title"], page)
 
     def test_partial_or_broken_files_still_render(self):
@@ -546,6 +597,33 @@ class ResultSummaryTests(DiagWebBase):
         if summary["waves"]:
             self.assertIn("<h2>Waveforms per region</h2>", page)
         self.assertIn("<h2>Clocks</h2>", page)
+        self.assertIsNone(summary.get("firmware_error"), summary)
+        self.assertIn("<h2>Firmware on the board</h2>", page)
+        self.assertIn("fuses ", summary["firmware"]["cpld"])
+        self.assertIn("bitstream ", summary["firmware"]["fpga"])
+        self.assertTrue((rundir / "firmware" / "cpld_readback.jed").exists())
+
+    def test_expansion_boards_card(self):
+        job, rundir = self.fixture_run()
+        tm = json.loads((rundir / "timing" / "timing.json").read_text())
+        tm["expansion_boards"] = {"boards": [{"index": 0, "zorro": "III", "manufacturer": 28014,
+                                              "manufacturer_name": "MNT", "product": 4, "serial": "0x00000001",
+                                              "er_type": "0x82", "er_flags": "0x20", "size": 64 << 20,
+                                              "memory": False, "boot_rom": False, "chained": False,
+                                              "no_shutup": False, "diag_vec": "0x0000", "configured_at": None}],
+                                  "end": {"count": 1, "reason": 0, "reason_text": "no more boards",
+                                          "z3_bus_errors": 0, "z2_bus_errors": 0}}
+        (rundir / "timing" / "timing.json").write_text(json.dumps(tm))
+        page = self.client.get(f"/diag/result/{job}").get_data(as_text=True)
+        self.assertIn("<h2>Expansion boards</h2>", page)
+        self.assertIn("Zorro III I/O, 64 MB: MNT 28014", page)
+        self.assertIn("no more boards", page)
+
+    def test_old_runs_without_firmware_ids_render(self):
+        job, rundir = self.fixture_run()
+        self.assertIsNone(diag.firmware_on_board(rundir))
+        page = self.client.get(f"/diag/result/{job}").get_data(as_text=True)
+        self.assertNotIn("Firmware on the board", page)
 
 
 class LockoutTests(DiagWebBase):

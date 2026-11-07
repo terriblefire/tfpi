@@ -45,7 +45,7 @@ HIST_PLAN = [("chip", 2), ("custom", 2), ("cia", 3), ("rom", 1), ("ramsey", 1), 
 HOLD_BIT = {"chip": 0, "custom": 1, "cia": 2, "rom": 3, "ramsey": 4, "other": 10}
 # 0xA8 sub-windows: counters are 16-bit, so windows are short (sized from the fullest bin
 # of the last one) and the bins are summed on the Pi
-PRESET_GROUPS = set(P.GROUPS) - {0x01, 0x03}    # test groups that run at a preset
+PRESET_GROUPS = set(P.GROUPS) - {0x01, 0x03, 0x04, 0x05, 0x06}    # test groups that run at a preset
 SUB_WIN_START = 0.015
 SUB_WIN_MIN = 0.002
 SUB_WIN_MAX = 0.5
@@ -983,6 +983,8 @@ class TimingRun:
         except Exception:
             res["hold_echo"] = None
         res["clock_switches"] = clock_switches(self.results, self.switch_log)
+        from . import zorro
+        res["expansion_boards"] = zorro.decode(self.results)
         res["switch_announcements"] = self.switch_log
         res["cycles"] = {str(p): regs for p, regs in self.cycles.items()}
         res["cycle_counters"] = {str(p): v for p, v in self.cc.items()}

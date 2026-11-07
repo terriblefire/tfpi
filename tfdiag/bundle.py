@@ -1,7 +1,9 @@
 """Zip a result directory for a bug report, with IP addresses and hostnames removed.
 
 Included: report.html/txt, VCDs, histogram JSON/CSV, board/timing JSON (build
-info, IDs, exerciser results), before/restore JSON, event logs (*.jsonl, *.log).
+info, IDs, exerciser results), before/restore JSON, event logs (*.jsonl, *.log),
+and the firmware read back from the board (firmware/cpld_readback.jed,
+firmware/fpga_bitstream.bin).
 """
 
 import re
@@ -9,7 +11,8 @@ import socket
 import zipfile
 from pathlib import Path
 
-INCLUDE = ("*.html", "*.txt", "*.vcd", "*.svg", "*.json", "*.csv", "*.jsonl", "*.log")
+INCLUDE = ("*.html", "*.txt", "*.vcd", "*.svg", "*.json", "*.csv", "*.jsonl", "*.log",
+           "cpld_readback.jed", "fpga_bitstream.bin")
 IPV4 = re.compile(r"\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b")
 IPV6 = re.compile(r"\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\b"
                   r"|\b[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4})*::(?:[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4})*)?\b")

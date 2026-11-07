@@ -651,6 +651,21 @@ class FakeSpiDev:
             st = struct.unpack_from(">I", self.sram, mb + P.MB_STATUS)[0] | 2
             struct.pack_into(">I", self.sram, mb + P.MB_STATUS, st)
 
+    def _zorro(self, opt):
+        """Body 3: the expansion board walk after the machine ID (opt "zorro": list of
+        [zorro3, manufacturer, product, er_type, er_flags, configured_base or None])."""
+        boards = opt.get("zorro")
+        if boards is None:
+            return
+        info = 1 << P.RF["info"]
+        for n, (z3, man, prod, typ, flg, base) in enumerate(boards):
+            self._add_result(0, 0x04, flags=info, size=n | (0x80 if z3 else 0), addr=0x1000 + n,
+                             exp=typ << 24 | prod << 16 | flg << 8, got=man << 16)
+            if base is not None:
+                self._add_result(0, 0x05, flags=info, size=n, addr=base, exp=0x10000,
+                                 got=0xFF000000 if z3 else 0x00E80000)
+        self._add_result(0, 0x06, flags=info, size=len(boards), addr=opt.get("zorro_end", 0), exp=0, got=0)
+
     def _exerciser_tick(self, s):
         e = self.ex
         if e.get("stub") or e["pi"] >= len(e["presets"]):
@@ -667,6 +682,7 @@ class FakeSpiDev:
             e["busy"] -= 1
             if not e["busy"]:
                 if e["after"] == "switch":
+                    self._zorro(opt)
                     e["phase"], e["busy"], e["after"] = 0x01, opt.get("switch_ticks", 2), "groups"
                     self._announce(preset, opt)
                 elif not self._switch_done(opt):
@@ -719,7 +735,7 @@ class FakeSpiDev:
 
 
 # ---- fake tool scripts --------------------------------------------------------------------
-TOOLS = ("fomu-flash", "pinctrl", "systemctl", "openocd")
+TOOLS = ("fomu-flash", "pinctrl", "systemctl", "openocd", "xc3sprog")
 
 
 def install_tools(bindir, state_path, pythonpath):
@@ -782,6 +798,34 @@ def tool_fomu(st, args):
         s["image"] = "none"
         s["gen"] += 1
     st.save(s)
+    return 0
+
+
+def cpld_jed(tag, qf=64):
+    """A small JED whose fuse map depends on tag (the 'design' programmed in the fake CPLD)."""
+    bits = "".join("1" if (i * 7 + tag) % 5 == 0 else "0" for i in range(qf))
+    return f"\x02QF{qf}*\nQV0*\nF0*\nX0*\nJ0 0*\nN DEVICE XC95288XL-TQ144*\nL0 {bits[:32]}*\nL32 {bits[32:]}*\n\x0300000\n"
+
+
+def tool_xc3sprog(st, args):
+    """Only the read form '-c CABLE -p 0 FILE:r' reads; anything else would program the CPLD."""
+    s = note_exposure(st, "xc3sprog " + " ".join(args))
+    s["log"].append("xc3sprog " + " ".join(args))
+    spec = args[-1] if args else ""
+    path, _, action = spec.rpartition(":")
+    if action != "r" or "-e" in args or "-l" in args or len(args) != 5:
+        s["forbidden"].append("xc3sprog " + " ".join(args))
+        st.save(s)
+        return 0
+    s.setdefault("cpld_reads", []).append({"amiga_reset": s["amiga_reset"], "image": s["image"]})
+    st.save(s)
+    if not s["powered"] or s.get("cpld_read_fails"):
+        print("No device found")
+        return 1
+    if Path(path).exists():
+        return 1
+    Path(path).write_text(cpld_jed(s.get("cpld_tag", 1)))
+    print("Readback done")
     return 0
 
 
@@ -860,7 +904,7 @@ def main(argv):
     st = State(os.environ["FAKE_BOARD_STATE"])
     tool, args = argv[0], argv[1:]
     return {"fomu-flash": tool_fomu, "pinctrl": tool_pinctrl, "systemctl": tool_systemctl,
-            "setgpio": tool_setgpio, "openocd": tool_openocd}[tool](st, args)
+            "setgpio": tool_setgpio, "openocd": tool_openocd, "xc3sprog": tool_xc3sprog}[tool](st, args)
 
 
 if __name__ == "__main__":

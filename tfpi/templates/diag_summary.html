@@ -24,7 +24,8 @@
 </div>{% endif %}
 
 {% set fs = summary.findings %}
-{% if fs and (fs.count or "board" in (outcome.steps if outcome else {})) %}<div class="card"><h2>Board test findings</h2>
+{% if fs and (fs.count or "board" in (outcome.steps if outcome else {})) %}<div class="card"><h2>Board test findings (experimental)</h2>
+<p class="muted">{{ board_experimental }}</p>
 {% if fs.count %}<p>{{ fs.count }} finding{{ "s" if fs.count != 1 }} noted{% if fs.count > fs.first | length %}; the first {{ fs.first | length }}{% endif %}:</p>
 <ul>{% for f in fs.first %}<li><b>{{ f.title }}</b>{% if f.detail %}: {{ f.detail }}{% endif %}{% if f.where %} <span class="muted">({{ f.where }})</span>{% endif %}</li>{% endfor %}</ul>
 {% else %}<p>No findings noted.</p>{% endif %}
@@ -37,4 +38,18 @@
 {% if ck.fabric %}<p><span class="muted">Fabric clock measured while each preset ran:</span> {% for p, mhz in ck.fabric.items() %}p{{ p }} {{ "%.2f" | format(mhz) }} MHz{% if not loop.last %} · {% endif %}{% endfor %}</p>{% endif %}
 {% if ck.switches %}<table><tr><th>Clock switch</th><th style="width:auto">Polls</th><th style="width:auto">Bus errors</th><th style="width:auto">Acked</th></tr>
 {% for s in ck.switches %}<tr><td>p{{ s.preset }}</td><td>{{ s.polls if s.polls is not none else ("did not settle" if not s.settled else "-") }}</td><td>{{ s.bus_errors if s.bus_errors is not none else "-" }}</td><td>{{ "yes" if s.acked else "no" }}</td></tr>{% endfor %}</table>{% endif %}
+</div>{% endif %}
+
+{% set fw = summary.firmware %}
+{% if fw %}<div class="card"><h2>Firmware on the board</h2>
+<p class="muted">Read back from the chips (read only), not from what this Pi last flashed.</p>
+<table><tr><th>RAM FPGA</th><td>{{ fw.fpga or "not read" }}</td></tr>
+<tr><th>BUS CPLD</th><td>{{ fw.cpld or "not read" }}</td></tr></table>
+</div>{% endif %}
+
+{% set eb = summary.boards %}
+{% if eb %}<div class="card"><h2>Expansion boards</h2>
+<p class="muted">The autoconfig chain as the hardware presents it, read before Kickstart ran (the TF card's own entry is off during the test).</p>
+{% if eb.boards %}<ol>{% for b in eb.boards %}<li>{{ b }}</li>{% endfor %}</ol>{% else %}<p>No expansion boards answered.</p>{% endif %}
+<p class="muted">Chain end: {{ eb.end }}</p>
 </div>{% endif %}

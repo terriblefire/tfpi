@@ -20,6 +20,8 @@ ALLOWED = {"-f", "-r", "-i", "-b", "-s", "-q"}
 # options that take a value
 _VALUED = {"-f", "-b", "-s"}
 ICE40_PREAMBLE = bytes.fromhex("7EAA997E")
+# JEDEC id -> bytes, for parts tfpi knows (tfpi/flasher.py SPI_FLASH_PARTS)
+FLASH_SIZES = {"bf2641": 2 << 20, "bf2642": 4 << 20, "bf2643": 8 << 20, "1f8601": 2 << 20}
 
 
 class FpgaError(RuntimeError):
@@ -70,9 +72,12 @@ class Fpga:
         rc, out = self.fomu("-i")
         return parse_jedec(out) if rc == 0 else None
 
-    def flash_checksum(self, length=None):
-        """sha256 of the first `length` bytes of the SPI flash, plus a look at the image."""
+    def flash_checksum(self, length=None, jedec=None, keep=False):
+        """sha256 of the first `length` bytes of the SPI flash (no more than the chip holds),
+        plus a look at the image; keep=True also returns the bytes read as "data"."""
         length = int(length or self.cfg.flash_check_bytes)
+        if jedec in FLASH_SIZES:
+            length = min(length, FLASH_SIZES[jedec])
         fd, tmp = tempfile.mkstemp(prefix="tfdiag-flash-", dir=_tmpdir(self.cfg))
         os.close(fd)
         try:
@@ -85,8 +90,11 @@ class Fpga:
                 pass
         if rc or len(data) < length:
             return None
-        return {"sha256": hashlib.sha256(data).hexdigest(), "bytes": length,
-                "bitstream": ICE40_PREAMBLE in data[:64]}
+        out = {"sha256": hashlib.sha256(data).hexdigest(), "bytes": length,
+               "bitstream": ICE40_PREAMBLE in data[:64]}
+        if keep:
+            out["data"] = data
+        return out
 
     # ---- configuration ------------------------------------------------------
     def load_image(self, path, expect_sha256=None, hold=None):
