@@ -14,6 +14,11 @@ Support: [Discord](https://discord.gg/4B8743Fm4w)
 2. Take the card out and put it back in. A drive called `bootfs` appears.
 3. Download [`vendor-data`](bootfs/vendor-data) and copy it onto `bootfs`
    (next to `config.txt` and `user-data`).
+   - The name must be exactly `vendor-data`, with no extension. Browsers often
+     save it as `vendor-data.txt`, and Finder and Explorer hide the `.txt`;
+     cloud-init then ignores it and nothing is installed. Check with
+     `ls /Volumes/bootfs` (macOS) or turn on file name extensions (Windows),
+     and rename it if needed.
    - Bookworm images (Imager writes a `firstrun.sh` instead of `user-data`):
      run `tools/tfpi-hook.sh /Volumes/bootfs` (macOS) or
      `tools/tfpi-hook.sh /media/$USER/bootfs` (Linux) instead.
