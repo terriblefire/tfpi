@@ -12,6 +12,8 @@ here=$(cd "$(dirname "$0")/.." && pwd)
 [ -f "$boot/config.txt" ] || { echo "$boot does not look like a Pi boot partition" >&2; exit 1; }
 
 cp "$here/bootfs/vendor-data" "$boot/vendor-data"
+# A browser download saved as vendor-data.txt is ignored by cloud-init; drop it.
+rm -f "$boot/vendor-data.txt" "$boot/._vendor-data.txt"
 echo "copied vendor-data"
 
 if [ -f "$boot/firstrun.sh" ]; then

@@ -226,6 +226,8 @@ first_install=0
 date -Is > /var/lib/tfpi/installed
 sync
 systemctl disable tfpi-firstboot.service 2>/dev/null || true
+systemctl disable --now tfpi-installing.service 2>/dev/null || true
+rm -f /etc/systemd/system/tfpi-installing.service /usr/local/lib/tfpi-installing.py
 
 host=$(hostname)
 echo

@@ -29,6 +29,71 @@ TimeoutStartSec=infinity
 WantedBy=multi-user.target
 UNIT
 
+# Until the firmware page is installed, port 80 shows "installing, please
+# wait" and the end of the install log. Starting tfpi-web stops it.
+cat > /usr/local/lib/tfpi-installing.py <<'PY'
+import html, http.server, subprocess, time
+LOG = "/var/log/tfpi-install.log"
+START = time.time()
+PAGE = """<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="refresh" content="15"><title>TF Pi: installing</title>
+<style>body{{font-family:sans-serif;max-width:46rem;margin:2rem auto;padding:0 1rem;
+background:#fff;color:#222}}pre{{background:#f3f3f3;padding:.8rem;overflow-x:auto;
+font-size:.8rem;white-space:pre-wrap}}@media(prefers-color-scheme:dark){{body{{background:#181818;
+color:#ddd}}pre{{background:#262626}}}}</style></head><body>
+<h1>TF Pi is installing</h1>
+<p>Please wait. The first install downloads and builds everything and takes
+20 to 30 minutes on a Pi 3 or 4. The Pi then restarts, and this address becomes
+the firmware page. Don't power off the Pi.</p>
+<p>Running for {mins} min ({state}). This page refreshes by itself.</p>
+<h2>Install log (last lines)</h2><pre>{log}</pre></body></html>"""
+
+def tail():
+    try:
+        with open(LOG, errors="replace") as f:
+            return "".join(f.readlines()[-20:]) or "(starting)"
+    except OSError:
+        return "(waiting for the network and the installer download)"
+
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        try:
+            state = subprocess.run(["systemctl", "is-active", "tfpi-firstboot.service"],
+                                   capture_output=True, text=True, timeout=5).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            state = ""
+        body = PAGE.format(mins=int((time.time() - START) // 60), state=html.escape(state or "unknown"),
+                           log=html.escape(tail())).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    def log_message(self, *a):
+        pass
+
+http.server.ThreadingHTTPServer(("", 80), H).serve_forever()
+PY
+
+cat > /etc/systemd/system/tfpi-installing.service <<UNIT
+[Unit]
+Description=TF Pi "installing, please wait" page
+ConditionPathExists=!/var/lib/tfpi/installed
+Conflicts=tfpi-web.service
+Before=tfpi-web.service
+
+[Service]
+ExecStart=/usr/bin/python3 /usr/local/lib/tfpi-installing.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
 systemctl daemon-reload 2>/dev/null || true
-systemctl enable tfpi-firstboot.service
+systemctl enable tfpi-installing.service tfpi-firstboot.service
+systemctl start --no-block tfpi-installing.service 2>/dev/null || true
 systemctl start --no-block tfpi-firstboot.service 2>/dev/null || true
