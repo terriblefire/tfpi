@@ -32,6 +32,13 @@
 {% if report %}<p><a href="/diag/result/{{ job }}/file/report.html" target="_blank" rel="noopener">See the board view in the report</a></p>{% endif %}
 </div>{% endif %}
 
+{% set xf = (summary.findings or {}).get("exerciser") %}
+{% if xf and xf.count %}<div class="card"><h2>Timing capture findings</h2>
+<p class="muted">What the exerciser saw while the 68060 ran its bus cycles: data read back different, or an access that took an exception.</p>
+<p>{{ xf.count }} finding{{ "s" if xf.count != 1 }} noted{% if xf.count > xf.first | length %}; the first {{ xf.first | length }}{% endif %}:</p>
+<ul>{% for f in xf.first %}<li><b>{{ f.title }}</b>{% if f.detail %}: {{ f.detail }}{% endif %}{% if f.where %} <span class="muted">({{ f.where }})</span>{% endif %}</li>{% endfor %}</ul>
+</div>{% endif %}
+
 {% set ck = summary.clocks %}
 {% if ck %}<div class="card"><h2>Clocks</h2>
 {% if ck.clocks %}<table>{% for c in ck.clocks %}<tr><th>{{ c.name }}</th><td>{% if c.mhz is defined and c.mhz is not none %}{{ c.mhz }} MHz{% elif c.ratio is defined %}{{ c.ratio }}{% else %}-{% endif %}{% if c.nominal %} <span class="muted">(nominal {{ c.nominal }})</span>{% endif %}{% if c.msg %}<br><span class="muted">{{ c.msg }}</span>{% endif %}</td></tr>{% endfor %}</table>{% endif %}

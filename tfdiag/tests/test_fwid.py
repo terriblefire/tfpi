@@ -314,3 +314,48 @@ class Identify(helpers.Base):
         self.assertEqual(s["a314d"], "active")
         self.assertTrue(s["cpld_reads"][0]["amiga_reset"])
         self.assertFalse(Path(env.cfg.marker).exists())
+
+
+class CpldDesignCheck(helpers.Base):
+    def write_manifest(self, fuses):
+        m = json.loads((self.env.images / "diag_manifest.json").read_text())
+        m["cpld_fuses"] = fuses
+        m["cpld_fuses_note"] = "the test CPLD"
+        (self.env.images / "diag_manifest.json").write_text(json.dumps(m))
+
+    def run_timing(self):
+        out = self.env.tmp / "job"
+        rc, evs = helpers.run_cli(self.env, ["run", "--images", str(self.env.images), "--out", str(out),
+                                             "--presets", "0", "--secs", "0.2", "--no-board"])
+        return out, evs
+
+    def test_supported_design_runs(self):
+        self.write_manifest([fwid.fuse_ident(fakes.cpld_jed(1))[0]["fuse_sha256"]])
+        out, evs = self.run_timing()
+        r = next(e for e in evs if e.get("name") == "cpld_compatibility")
+        self.assertEqual(r["status"], "info", r)
+        self.assertTrue((out / "timing" / "timing.json").exists())
+
+    def test_old_design_is_refused(self):
+        self.write_manifest(["0" * 64])
+        out, evs = self.run_timing()
+        r = next(e for e in evs if e.get("name") == "cpld_compatibility")
+        self.assertEqual(r["status"], "incomplete")
+        self.assertIn("update the TF firmware (both chips)", r["msg"])
+        self.assertFalse((out / "timing" / "timing.json").exists())
+        self.assertNotIn("exerciser_start", [e.get("name") for e in evs])
+
+    def test_override(self):
+        self.write_manifest(["0" * 64])
+        self.env.cfg.any_cpld = True
+        out, evs = self.run_timing()
+        r = next(e for e in evs if e.get("name") == "cpld_compatibility")
+        self.assertEqual(r["status"], "info")
+        self.assertIn("overridden", r["msg"])
+
+    def test_readback_failed_falls_back_to_usercode(self):
+        from tfdiag import manifest
+        ok, msg = manifest.cpld_design_compatible({"cpld_fuses": ["x"], "cpld_usercodes": [fakes.USERCODE]},
+                                                  None, f"0x{fakes.USERCODE:08x}")
+        self.assertTrue(ok)
+        self.assertIn("could not be read back", msg)

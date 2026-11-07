@@ -68,6 +68,7 @@ class TimingError(RuntimeError):
 
 FAB_SAMPLE_S = 10.0   # sample the free-running fabric counter this often per preset
 FAB_WRAP_S = 35.0     # 2^32 clks at <= ~120 MHz is > 35 s: pairs further apart may have wrapped
+FAB_MIN_HZ, FAB_MAX_HZ = 20e6, 130e6   # a fabric clock outside this is a bad pair (presets run 50-110 MHz)
 
 def bin_ranges(meas, fabric_mhz=None):
     """[(lo_ns, hi_ns or None)] for bins 1..31 (bin 0 is special) of a non-phase measurement."""
@@ -236,6 +237,7 @@ class TimingRun:
         self.cycles = {}        # preset -> region -> [cycle dicts] (amiga.cycles)
         self.results = []
         self.hangs = []
+        self.start_captures = []
         self.machine = None
         self.exerciser = {}
         self.last_hb = None
@@ -261,6 +263,7 @@ class TimingRun:
             self.spi.sram_write(P.MAILBOX + P.MB_HOLD, bytes(4))            # no hold at the start
             if self.spi.sram_read(P.BODY_BASE, len(body)) != body:
                 self.ev.warn("exerciser body read back differs from what was written (shared SRAM fault?)")
+            cap = self.start_capture_arm()
             self.spi.reset_release()
             t0 = self.clock.now()
             stage = None
@@ -273,24 +276,85 @@ class TimingRun:
                                      f"presets {presets} from index {start_index}")
                         self.exerciser.update(version=st["version"], plansrc=st["plansrc"])
                         self.last_hb, self.last_hb_t = st["heartbeat"], self.clock.now()
+                        self.start_capture_read(cap, attempt, "started")
                         checkpoint("timing.started")
                         return True
                     if st["phase"] in (P.PH_COPYBAD, P.PH_STUBEXC):
                         self.ev.result("exerciser_stub", "finding", "boot ROM stub halted: " +
                                        P.STUB_STAGES[st["phase"]] + " (chip RAM fault?)", step="timing")
+                        self.start_capture_read(cap, attempt, "stub halted")
                         self.spi.reset_assert()
                         return False
                     if st["phase"] == P.PH_BADBODY or (st["flags"] & P.STATUS_NOBODY
                                                        and self.clock.now() - t0 > 2.0):
                         self.ev.warn("exerciser stub reports no valid body: uploading again")
+                        self.start_capture_read(cap, attempt, "no valid body")
                         break
                 self.clock.sleep(self.poll)
             else:
                 what = (f"stub stuck at '{P.STUB_STAGES.get(stage, hex(stage))}'" if stage is not None
                         else "no 'TFDX' from the boot ROM stub")
-                self.ev.warn(f"{what} within {self.start_timeout:.0f} s (attempt {attempt})")
+                rec = self.start_capture_read(cap, attempt, "no answer" if stage is None else "stub stuck")
+                self.ev.warn(f"{what} within {self.start_timeout:.0f} s (attempt {attempt})"
+                             + (f": {rec['summary']}" if rec else ""))
         self.spi.reset_assert()
         return False
+
+    # ---- what the 060 did after reset release (each start attempt) -------------------------
+    def start_capture_arm(self):
+        """Before releasing reset: clear the cycle counters and arm a waveform on the first
+        TS fall (the 060's first bus cycle). No address log: before the body runs it would
+        overwrite the body in the shared SRAM."""
+        try:
+            self.spi.cycle_clear(P.CYCLE_THRESHOLD)
+            self.spi.wave_arm(2, 0, log=False)
+            return {"t": self.clock.now()}
+        except Exception as e:                  # an image without them
+            self.ev.warn(f"start capture: {e}")
+            return None
+
+    def start_capture_read(self, cap, attempt, outcome):
+        """Waveform from reset release (VCD waves/wave_start_a<n>.vcd) and the Amiga-side
+        cycle counters, so a start that fails shows how far the 060 got."""
+        if cap is None:
+            return None
+        rec = {"attempt": attempt, "outcome": outcome, "seconds": round(self.clock.now() - cap["t"], 2)}
+        try:
+            ws = self.spi.wave_status()
+            if not ws["full"]:
+                self.spi.wave_stop()
+                ws = self.spi.wave_status()
+            entries = self.spi.wave_entries(ws)
+            trig = (ws["trigger"] - ws["first"]) % P.WAVE_ENTRIES if ws["triggered"] else None
+            name = f"wave_start_a{attempt}.vcd"
+            wdir = self.out / "waves"
+            wdir.mkdir(parents=True, exist_ok=True)
+            vcd.write(wdir / name, entries, trigger_index=trig, fabric_mhz=P.FABRIC_MHZ,
+                      title=f"start attempt {attempt}: reset released, trigger first TS fall ({outcome})")
+            sig = {n: any((e[0] >> i) & 1 == 0 for e in entries)          # bit i = WAVE_SIGNALS[i]
+                   for i, n in enumerate(P.WAVE_SIGNALS)} if entries else {}
+            rec.update(file=f"waves/{name}", entries=len(entries), ts_seen=bool(ws["triggered"]),
+                       low_seen=sorted(n for n, v in sig.items() if v))
+        except Exception as e:
+            rec["wave_error"] = str(e)
+        try:
+            c = self.spi.cycle_counters()
+            rec["cycles"] = {k: c.get(k) for k in ("as", "dsack", "sterm")}
+        except Exception as e:
+            rec["cycles_error"] = str(e)
+        cy = rec.get("cycles") or {}
+        if rec.get("ts_seen") is False:
+            rec["summary"] = "the 060 made no bus cycle after reset release (no TS)"
+        elif cy and not cy.get("as"):
+            rec["summary"] = ("the 060 ran bus cycles after reset release but none reached the Amiga "
+                              "(no AS20): it never fetched Kickstart")
+        elif cy:
+            rec["summary"] = (f"after reset release: {cy.get('as')} Amiga cycles ({cy.get('dsack')} DSACK, "
+                              f"{cy.get('sterm')} STERM) in {rec['seconds']} s")
+        else:
+            rec["summary"] = "start capture read"
+        self.start_captures.append(rec)
+        return rec
 
     def switch_guard(self, st):
         """Clock switch handshake (0x088 / 0x834). Slow SPI during phase 0x0001 or while a
@@ -663,6 +727,12 @@ class TimingRun:
             armed = self.check_wave(armed)
         return st
 
+    def fabric_break(self):
+        """The FPGA was reloaded: its free-running counter starts again from 0."""
+        for samples in self.fab.values():
+            if samples and samples[-1] is not None:
+                samples.append(None)
+
     def fabric_sample(self, preset):
         """Free-running fabric counter vs Pi time while `preset` runs (0xA4)."""
         try:
@@ -677,11 +747,17 @@ class TimingRun:
             return None
         # Sum the steps between consecutive samples (each < one counter wrap); a pair
         # further apart than FAB_WRAP_S may have wrapped more than once and is skipped.
+        # None marks an FPGA reload (the counter restarts from 0): no step across it. A step
+        # that implies a clock the PLL cannot make is a missed reload or a bad read: skipped.
         clks = secs = 0.0
-        for (f0, t0), (f1, t1) in zip(s, s[1:]):
+        for a, b in zip(s, s[1:]):
+            if a is None or b is None:
+                continue
+            (f0, t0), (f1, t1) = a, b
             dt = t1 - t0
-            if 0 < dt < FAB_WRAP_S:
-                clks += (f1 - f0) & 0xFFFFFFFF
+            d = (f1 - f0) & 0xFFFFFFFF
+            if 0 < dt < FAB_WRAP_S and FAB_MIN_HZ <= d / dt <= FAB_MAX_HZ:
+                clks += d
                 secs += dt
         if secs < 0.3:
             return None
@@ -803,9 +879,12 @@ class TimingRun:
         start_index, append, restarts = 0, False, 0
         while start_index < len(presets):
             if not self.start(presets, mask, start_index, append):
+                seen = "; ".join(f"attempt {c['attempt']}: {c['summary']}" for c in self.start_captures
+                                 if c.get("summary"))
                 self.ev.result("exerciser_start", "incomplete",
                                "the exerciser did not start after two tries: the 060 may not reach the TF "
-                               "boot ROM, or the shared SRAM is faulty", step="timing")
+                               "boot ROM, or the shared SRAM is faulty"
+                               + (f" ({seen}; waveforms waves/wave_start_a*.vcd)" if seen else ""), step="timing")
                 return False
             sched = self.schedule()
             armed = None
@@ -888,6 +967,7 @@ class TimingRun:
             # Amiga reset), then a fresh run from the next preset
             self.spi.reset_assert()
             try:
+                self.fabric_break()
                 self.fpga.load_image(self.images / "diag_timing.bin",
                                      (self.info.get("images") or {}).get("diag_timing.bin"),
                                      hold=self.spi.reset_assert)
@@ -961,6 +1041,7 @@ class TimingRun:
         res["exerciser"] = self.exerciser
         res["results"] = self.results
         res["hangs"] = self.hangs
+        res["start_captures"] = self.start_captures
         res["histograms"] = {str(p): regs for p, regs in self.hist.items()}
         res["histogram_measurements"] = [n for n, _ in P.HIST_MEAS]
         res["tprobe_histograms"] = {str(p): {r: {str(m): v for m, v in ms.items()} for r, ms in regs.items()}

@@ -27,6 +27,8 @@ class Config:
     xc3sprog: str = _env("XC3SPROG", "xc3sprog", "XC3SPROG")
     xc3sprog_cable: str = _env("XC3SPROG_CABLE", "gpiod_creator", "XC3SPROG_CABLE")
     cpld_readback: bool = _env("CPLD_READBACK", "1") not in ("0", "no", "false", "")
+    # run the timing image whatever CPLD design is fitted (development boards only)
+    any_cpld: bool = _env("ANY_CPLD", "0") not in ("0", "no", "false", "")
     cpld_read_timeout: float = float(_env("CPLD_READ_TIMEOUT", "300"))
     tfpi_state: str = _env("TFPI_STATE", str(Path(_STATE) / "state.json"))
     iceunpack: str = _env("ICEUNPACK", "iceunpack")

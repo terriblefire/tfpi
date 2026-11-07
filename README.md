@@ -94,6 +94,15 @@ what to do.
   records each board's manufacturer, product, serial and size, and shuts it up
   (or, if it can't be shut up, configures it) so the next one shows. The
   boards go back to normal at the reset that ends the test.
+- The timing capture only runs on a BUS CPLD design it was built for: the CPLD fuse
+  map read back at the start is checked against `cpld_fuses` in
+  `diag_manifest.json` (the usercode is the same on every build). On an older
+  design only the board test runs, and the page says to update the firmware
+  first. Development boards with test CPLDs can set `"any_cpld": true` in
+  `/etc/tfpi/diag.json` (or `TFDIAG_ANY_CPLD=1`).
+- If the exerciser does not start, each start attempt still records the 68060's
+  bus activity after reset release (`timing/waves/wave_start_a*.vcd` and the
+  Amiga-side cycle counts), to show how far the boot got.
 - The `tfdiag` tool (`tfdiag/`) and the diagnostic images (`tfpi/diag_images/`,
   with `diag_manifest.json`) are part of tfpi and install with it.
 - One job at a time: no flash or update can start during a test, and no test
