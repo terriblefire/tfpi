@@ -36,8 +36,8 @@ class FakeGhcr:
             def do_GET(self):
                 base = f"http://127.0.0.1:{self.server.server_port}"
                 if self.path.startswith("/token"):
-                    if fake.missing:          # ghcr: package not there (or private)
-                        return self.reply(403, b'{"errors":[{"code":"DENIED"}]}')
+                    if fake.missing:          # ghcr: 403 package not there, 401 private
+                        return self.reply(fake.missing, b'{"errors":[{"code":"DENIED"}]}')
                     return self.reply(200, json.dumps({"token": "anon"}).encode())
                 if self.path.startswith("/storage/"):
                     if self.headers.get("Authorization"):
@@ -157,9 +157,11 @@ class FeedTests(FeedBase):
         self.ghcr.private = True
         self.assertIn("public", feed.check()["error"])
 
-    def test_nothing_published_yet(self):
-        self.ghcr.missing = True
+    def test_nothing_published_yet_or_private(self):
+        self.ghcr.missing = 403
         self.assertEqual(feed.check()["error"], feed.NOT_PUBLISHED)
+        self.ghcr.missing = 401
+        self.assertEqual(feed.check()["error"], feed.NOT_PUBLIC)
 
     def test_versions_from_build_names(self):
         builds = {b["name"]: b for b in feed.check()["builds"]}

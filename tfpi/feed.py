@@ -43,7 +43,9 @@ MANIFEST_TYPES = ", ".join(["application/vnd.oci.image.manifest.v1+json",
                             "application/vnd.docker.distribution.manifest.v2+json"])
 
 
-NOT_PUBLISHED = "no firmware has been published yet (or the package isn't public)"
+NOT_PUBLISHED = "no firmware has been published yet"
+NOT_PUBLIC = ("the firmware package isn't public yet (on GitHub: the tf4060-firmware package, "
+              "Package settings, Change visibility, Public)")
 
 
 class FeedError(RuntimeError):
@@ -89,7 +91,7 @@ class Registry:
         """Bearer challenge -> anonymous pull token (public packages)."""
         fields = dict(re.findall(r'(\w+)="([^"]*)"', challenge or ""))
         if not challenge or not challenge.lower().startswith("bearer") or "realm" not in fields:
-            raise FeedError(NOT_PUBLISHED)
+            raise FeedError(NOT_PUBLIC)
         query = {"scope": f"repository:{self.path}:pull"}
         if "service" in fields:
             query["service"] = fields["service"]
@@ -99,9 +101,11 @@ class Registry:
                 data = json.loads(reply.read())
         except urllib.error.HTTPError as error:
             error.close()
-            if error.code in (401, 403):
-                # ghcr refuses an anonymous token for a package that doesn't exist or isn't public
+            # ghcr's anonymous token: 403 when the package doesn't exist, 401 when it's private
+            if error.code == 403:
                 raise FeedError(NOT_PUBLISHED) from error
+            if error.code == 401:
+                raise FeedError(NOT_PUBLIC) from error
             raise FeedError(f"registry login failed: HTTP {error.code}") from error
         except (OSError, ValueError) as error:
             raise FeedError(f"registry login failed: {error}") from error
