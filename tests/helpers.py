@@ -56,6 +56,7 @@ STUBS = {
         import os, sys, shutil
         flash = os.environ["FAKE_FLASH"]
         args = sys.argv[1:]
+        open(os.environ["FAKE_CALLS"], "a").write("fomu-flash " + " ".join(args) + "\n")
         if "-w" in args:
             data = open(args[args.index("-w") + 1], "rb").read()
             if os.environ.get("FAKE_FOMU_CORRUPT"):
@@ -76,6 +77,7 @@ STUBS = {
     "xc3sprog": r'''
         import os, sys
         open(os.environ["FAKE_XC3_LOG"], "a").write(" ".join(sys.argv[1:]) + "\n")
+        open(os.environ["FAKE_CALLS"], "a").write("xc3sprog\n")
         # Real banner: contains the word "failure" on every run.
         print("XC3SPROG (c) 2004-2011 xc3sprog project $Rev: 774 $ OS: Linux")
         print("Feedback on success/failure/enhancement requests:")
@@ -116,7 +118,7 @@ class Sandbox(unittest.TestCase):
             path.write_text(f"#!{sys.executable}\n" + textwrap.dedent(body))
             path.chmod(0o755)
         setgpio = self.tmp / "setgpio.sh"
-        setgpio.write_text("true\n")
+        setgpio.write_text(f'echo setgpio >> "{self.tmp / "calls.log"}"\n')
         self.env = {
             "TFPI_ETC": str(self.tmp / "etc"), "TFPI_STATE_DIR": str(self.tmp / "state"),
             "TFPI_SHARE": str(self.tmp / "share"),
@@ -125,6 +127,7 @@ class Sandbox(unittest.TestCase):
             "TFPI_SETGPIO": str(setgpio),
             "FAKE_FLASH": str(self.tmp / "spiflash.bin"), "FAKE_XC3_LOG": str(self.tmp / "xc3.log"),
             "FAKE_A314": str(self.tmp / "a314"),
+            "FAKE_CALLS": str(self.tmp / "calls.log"),
         }
         self._saved = {key: os.environ.get(key) for key in
                        list(self.env) + ["FAKE_FOMU_CORRUPT", "FAKE_XC3_FAIL", "FAKE_CDONE_LOW", "FAKE_SPI_ID"]}

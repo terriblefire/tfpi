@@ -3,12 +3,15 @@
 Ported from tf4060/boards/tf4060r5/flash_ram.sh and flash_bus.sh:
   * a314d keeps running: it backs off the SPI pins by itself;
   * FPGA: identify the SPI flash by JEDEC ID (fomu-flash -i), check the image
-    fits, fomu-flash -u -w, read the image length back (-b) and compare,
-    fomu-flash -r, setgpio.sh, wait for CDONE (GPIO 23);
+    fits, fomu-flash -u -w, read the image length back (-b) and compare;
   * CPLD: xc3sprog -c gpiod_creator -p 0 -v, ONE attempt only. A CPLD that
     fails erase/verify is failing; more cycles destroy it. After a failure the
     CPLD is locked out until someone runs `tfpi-flash clear-cpld-fault`.
   * Chips whose image is already installed are skipped (saves erase cycles).
+  * FPGA boot: fomu-flash -r, setgpio.sh, wait for CDONE (GPIO 23). After a
+    verified FPGA write (CDONE high is also the check that the board is powered
+    before any CPLD attempt), and again as the job's last step after the CPLD or
+    after any failure, so the FPGA is never left held in reset.
 
 CLI:
   tfpi-flash status
@@ -197,14 +200,27 @@ def flash_fpga(release, state, work):
     config.save_state(state)
     log("FPGA: verify OK")
 
-    # Boot the written flash, then hand the pins back (setgpio.sh), as flash_ram.sh does.
-    run([config.FOMU_FLASH, "-r"])
-    run(["bash", config.SETGPIO])
-    if not wait_for_cdone():
+    # Boot it now: CDONE high also shows the board is powered before a CPLD attempt.
+    if not boot_fpga():
         fpga["last_result"] = "cdone-low"
         raise FlashError("flash verified, but the FPGA did not configure (CDONE low). "
                          "Check the board is powered.")
-    log("FPGA: CDONE high, FPGA configured from SPI flash")
+
+
+def boot_fpga():
+    """Reset the FPGA so it configures from its SPI flash, hand the pins back
+    (setgpio.sh), as flash_ram.sh does; True once CDONE is high. Never raises:
+    it runs at the end of every flash job, including failed ones."""
+    log("FPGA: reset (fomu-flash -r), booting from the SPI flash")
+    try:
+        run([config.FOMU_FLASH, "-r"])
+        run(["bash", config.SETGPIO])
+        ok = wait_for_cdone()
+    except Exception as error:          # a missing tool must not hide the real result
+        log(f"FPGA: reset failed: {error}")
+        return False
+    log("FPGA: CDONE high, FPGA configured from SPI flash" if ok else "FPGA: CDONE stayed low")
+    return ok
 
 
 def flash_cpld(release, state, work):
@@ -269,23 +285,31 @@ def flash(zip_path, name=None, force_fpga=False, force_cpld=False):
         else:
             work = config.STATE_DIR / "work"
             work.mkdir(parents=True, exist_ok=True)
+            failure = None
             try:
                 if todo["fpga"]:
                     flash_fpga(release, state, work)
                 if todo["cpld"]:
                     flash_cpld(release, state, work)
             except Exception as error:
-                entry["result"] = f"FAILED: {error}"
-                raise
+                failure = error
             finally:
                 shutil.rmtree(work, ignore_errors=True)
-                if entry["result"] is None:
-                    entry["result"] = "ok"
+                # After the CPLD, or after any failure (the FPGA may be held in reset),
+                # reset the FPGA last so the board starts on what is in the flash.
+                if todo["cpld"] or failure is not None:
+                    booted = boot_fpga()
+                    if failure is None and not booted:
+                        failure = FlashError("CPLD programmed, but the FPGA did not configure "
+                                             "afterwards (CDONE low). Power-cycle the Amiga.")
+                entry["result"] = f"FAILED: {failure}" if failure else "ok"
                 state["history"] = ([entry] + state["history"])[:50]
                 if entry["result"] == "ok":
                     state["release"] = name
                     state["seed"] = release.seed
                 config.save_state(state)
+            if failure is not None:
+                raise failure
         if entry["result"] == "nothing to do":
             state["history"] = ([entry] + state["history"])[:50]
             config.save_state(state)
