@@ -88,6 +88,8 @@ set in `/etc/tfpi/tfpi.conf` (`BOARD=tf4060r5`).
   fails, the CPLD is locked out on this Pi: a CPLD that fails verify is failing,
   and more erase cycles can destroy it. Check or replace the chip, then run
   `sudo tfpi-flash clear-cpld-fault`.
+- Every flash ends by resetting the FPGA (`fomu-flash -r`, then CDONE), also
+  after a CPLD-only flash or a failed one, so the FPGA is never left held in reset.
 - Only one flash runs at a time.
 
 The page is meant for your home network only. Don't forward it to the internet.
