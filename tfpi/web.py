@@ -22,7 +22,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 
 from . import config
-from . import custom, diag, files, sdk, update
+from . import custom, diag, feed, files, sdk, update
 from .flasher import plan
 from .fwimage import FirmwareError, load_release
 
@@ -217,7 +217,7 @@ def create_app():
                         reverse=True) if config.FIRMWARE_DIR.is_dir() else []
         job = current_job()
         status = job_status(job)[0] if job else None
-        if app.config.get("UPDATE_AUTOCHECK") and update.stale():
+        if app.config.get("UPDATE_AUTOCHECK") and (update.stale() or feed.stale()):
             background_check()
         return render_template("index.html", state=state, stored=[p.name for p in stored],
                                diag_recovery=diag.recovery(),
@@ -226,6 +226,7 @@ def create_app():
                                spirom=config.SPIROM_FILE.exists(), update=update.cached(),
                                verify=diag.last_verify(), verify_warning=diag.VERIFY_WARNING,
                                warning_screen=diag.WARNING_SCREEN,
+                               firmware=feed.view(feed.cached(), state, feed.developer()),
                                updating=update.running())
 
     checking = threading.Lock()
@@ -233,7 +234,10 @@ def create_app():
     def background_check():
         def work():
             try:
-                update.check()
+                if update.stale():
+                    update.check()
+                if feed.stale():
+                    feed.check()
             finally:
                 checking.release()
         if checking.acquire(blocking=False):
@@ -265,6 +269,49 @@ def create_app():
         (config.JOB_DIR / "current").write_text(job)
         prune_jobs()
         return redirect(url_for("job_page", job=job))
+
+    # --- published firmware (ghcr.io) ------------------------------------------------
+
+    @app.post("/firmware/check")
+    @login_required
+    def firmware_check():
+        result = feed.check()
+        if result.get("error"):
+            flash(f"Couldn't check for firmware: {result['error']}", "error")
+        else:
+            shown = feed.view(result, config.load_state(), feed.developer())
+            if not shown["available"]:
+                flash("No newer firmware published.", "ok")
+        return redirect(url_for("index"))
+
+    @app.post("/firmware/get")
+    @login_required
+    def firmware_get():
+        build = feed.find(request.form.get("name", ""), feed.developer())
+        if build is None:
+            flash("That build isn't in the published list (check for firmware again).", "error")
+            return redirect(url_for("index"))
+        prune_uploads()
+        token = secrets.token_hex(16)
+        folder = config.UPLOAD_DIR / token
+        folder.mkdir(parents=True)
+        try:
+            feed.download(build, folder)
+        except (feed.FeedError, OSError) as error:
+            shutil.rmtree(folder, ignore_errors=True)
+            flash(f"Couldn't download {build['name']}: {error}", "error")
+            return redirect(url_for("index"))
+        return redirect(url_for("review", token=token))
+
+    @app.post("/settings/developer")
+    @login_required
+    def set_developer():
+        conf = web_conf()
+        conf["developer"] = request.form.get("on") == "1"
+        save_web_conf(conf)
+        flash("Developer mode on: developer builds are listed too. They are not tested releases."
+              if conf["developer"] else "Developer mode off: only release builds are offered.", "ok")
+        return redirect(url_for("index"))
 
     @app.get("/api/status")
     @login_required
