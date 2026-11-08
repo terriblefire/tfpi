@@ -1,11 +1,11 @@
 {% extends "base.html" %}{% block body %}
 {% import "_macros.html" as m with context %}
 {% include "_banners.html" %}
-<div class="card"><h1>TF Pi software</h1>
-<p class="muted">The installer, this web page and the tools it uses (fomu-flash, xc3sprog, a314d).</p><table>
-{% for name, v in versions.items() %}<tr><th>{{ name }}</th><td class="mono">{{ v.ref[:12] if v.ref else "" }} <span class="muted">{{ v.repo }}</span></td></tr>
-{% else %}<tr><td class="muted">no version info (installer not run?)</td></tr>{% endfor %}
-</table>
+<div class="card{{ ' attention' if update and update.available else '' }}">
+<div class="cardhead"><h1>TF Pi software</h1>
+<form method="post" action="/update/check"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="big {{ 'secondary' if update and update.available else '' }}">Check for updates</button></form></div>
+<p class="muted">{% if not update %}Not checked for updates yet.{% else %}Last checked <span class="when" data-t="{{ update.time | int }}"></span>.{% endif %} The Pi also checks by itself every 12 hours.</p>
+{% if update and update.error %}<p class="warn">The last check failed: {{ update.error }}</p>{% endif %}
 {% if update and update.available %}
 <div class="update">
 <p><b>Update available</b> <span class="mono muted">{{ update.installed[:7] or "?" }} → {{ update.latest[:7] }}</span></p>
@@ -16,12 +16,16 @@
 {% if update.a314d_local %}<br><b>The a314d on this Pi isn't the one the installer built (a hand-built one?). It will be replaced.</b>{% elif update.a314d_unknown %}<br>If you built a314d by hand on this Pi, it will be replaced.{% endif %}</p>
 {% else %}<p class="ok">a314d keeps running; this page restarts for a few seconds.</p>{% endif %}
 <form method="post" action="/update/start" onsubmit="return confirm({{ ('Update the Pi software now?' ~ (' a314d will be stopped and the Amiga loses PI0: for several minutes.' if update.a314d_interrupted else ' a314d is not touched.')) | tojson | forceescape }})">
-<input type="hidden" name="csrf" value="{{ csrf }}"><button {% if updating or job_state == "running" %}disabled{% endif %}>Update now</button></form>
+<input type="hidden" name="csrf" value="{{ csrf }}"><button class="big" {% if updating or job_state == "running" %}disabled{% endif %}>Update now</button>
+{% if updating %}<span class="muted">An update is already running.</span>{% elif job_state == "running" %}<span class="muted">Wait for the running job to finish.</span>{% endif %}</form>
 </div>
+{% elif update and not update.error %}<p><span class="ok">Up to date.</span></p>
 {% endif %}
-<form method="post" action="/update/check" style="margin-top:10px"><input type="hidden" name="csrf" value="{{ csrf }}">
-<span class="muted">{% if not update %}Not checked for updates yet.{% elif update.error %}<span class="warn">Last check failed: {{ update.error }}</span>{% elif not update.available %}Up to date.{% endif %}
-{% if update %}Checked <span class="when" data-t="{{ update.time | int }}"></span>.{% endif %}</span>
-<button class="secondary">Check for updates</button></form>
 </div>
+
+<div class="card"><h2>Installed versions</h2>
+<p class="muted">The installer, this web page and the tools it uses (fomu-flash, xc3sprog, a314d).</p><table>
+{% for name, v in versions.items() %}<tr><th>{{ name }}</th><td class="mono">{{ v.ref[:12] if v.ref else "" }} <span class="muted">{{ v.repo }}</span></td></tr>
+{% else %}<tr><td class="muted">no version info (installer not run?)</td></tr>{% endfor %}
+</table></div>
 {% endblock %}
