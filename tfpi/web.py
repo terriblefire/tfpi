@@ -157,7 +157,7 @@ def create_app():
     @app.errorhandler(413)
     def too_large(_error):
         flash("That file is too large for a firmware zip (8 MB max).", "error")
-        return redirect(url_for("index"))
+        return redirect(url_for("firmware_page"))
 
     @app.route("/setup", methods=["GET", "POST"])
     def setup():
@@ -209,9 +209,8 @@ def create_app():
             flash("Password changed.", "ok")
         return redirect(url_for("index"))
 
-    @app.get("/")
-    @login_required
-    def index():
+    def page(template):
+        """Home, Firmware and Updates share one set of facts about this Pi."""
         state = config.load_state()
         stored = sorted(config.FIRMWARE_DIR.glob("*.zip"), key=lambda p: p.stat().st_mtime,
                         reverse=True) if config.FIRMWARE_DIR.is_dir() else []
@@ -219,7 +218,7 @@ def create_app():
         status = job_status(job)[0] if job else None
         if app.config.get("UPDATE_AUTOCHECK") and (update.stale() or feed.stale()):
             background_check()
-        return render_template("index.html", state=state, stored=[p.name for p in stored],
+        return render_template(template, state=state, stored=[p.name for p in stored],
                                diag_recovery=diag.recovery(),
                                versions=config.read_json(config.VERSIONS_FILE, {}),
                                a314d=a314d_state(), job=job, job_state=status,
@@ -228,6 +227,21 @@ def create_app():
                                warning_screen=diag.WARNING_SCREEN,
                                firmware=feed.view(feed.cached(), state, feed.developer()),
                                updating=update.running())
+
+    @app.get("/")
+    @login_required
+    def index():
+        return page("home.html")
+
+    @app.get("/firmware")
+    @login_required
+    def firmware_page():
+        return page("firmware.html")
+
+    @app.get("/updates")
+    @login_required
+    def updates_page():
+        return page("updates.html")
 
     checking = threading.Lock()
 
@@ -243,6 +257,26 @@ def create_app():
         if checking.acquire(blocking=False):
             threading.Thread(target=work, daemon=True).start()
 
+    @app.post("/check-all")
+    @login_required
+    def check_all():
+        """Home page: check for new firmware and new TF Pi software together."""
+        found = []
+        sw = update.check()
+        fw = feed.check()
+        if sw.get("available"):
+            found.append("a TF Pi software update")
+        if feed.view(fw, config.load_state(), feed.developer())["available"]:
+            found.append("new firmware")
+        errors = [f"{what}: {r['error']}" for what, r in (("software", sw), ("firmware", fw)) if r.get("error")]
+        if errors:
+            flash("Couldn't check " + "; ".join(errors), "error")
+        if found:
+            flash("Found " + " and ".join(found) + ".", "ok")
+        elif not errors:
+            flash("Everything is up to date.", "ok")
+        return redirect(url_for("index"))
+
     @app.post("/update/check")
     @login_required
     def update_check():
@@ -251,21 +285,21 @@ def create_app():
             flash(f"Couldn't check for updates: {result['error']}", "error")
         elif not result.get("available"):
             flash("This Pi is up to date.", "ok")
-        return redirect(url_for("index"))
+        return redirect(url_for("updates_page"))
 
     @app.post("/update/start")
     @login_required
     def update_start():
         if busy_reason():
             flash(busy_reason(), "error")
-            return redirect(url_for("index"))
+            return redirect(url_for("updates_page"))
         config.JOB_DIR.mkdir(parents=True, exist_ok=True)
         job = "update-" + time.strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(3)
         try:
             update.start(config.JOB_DIR, job, str(Path(__file__).resolve().parent.parent))
         except update.UpdateError as error:
             flash(f"Couldn't start the update: {error}", "error")
-            return redirect(url_for("index"))
+            return redirect(url_for("updates_page"))
         (config.JOB_DIR / "current").write_text(job)
         prune_jobs()
         return redirect(url_for("job_page", job=job))
@@ -282,7 +316,7 @@ def create_app():
             shown = feed.view(result, config.load_state(), feed.developer())
             if not shown["available"]:
                 flash("No newer firmware published.", "ok")
-        return redirect(url_for("index"))
+        return redirect(url_for("firmware_page"))
 
     @app.post("/firmware/get")
     @login_required
@@ -290,7 +324,7 @@ def create_app():
         build = feed.find(request.form.get("name", ""), feed.developer())
         if build is None:
             flash("That build isn't in the published list (check for firmware again).", "error")
-            return redirect(url_for("index"))
+            return redirect(url_for("firmware_page"))
         prune_uploads()
         token = secrets.token_hex(16)
         folder = config.UPLOAD_DIR / token
@@ -300,7 +334,7 @@ def create_app():
         except (feed.FeedError, OSError) as error:
             shutil.rmtree(folder, ignore_errors=True)
             flash(f"Couldn't download {build['name']}: {error}", "error")
-            return redirect(url_for("index"))
+            return redirect(url_for("firmware_page"))
         return redirect(url_for("review", token=token))
 
     @app.post("/settings/developer")
@@ -311,7 +345,7 @@ def create_app():
         save_web_conf(conf)
         flash("Developer mode on: developer builds are listed too. They are not tested releases."
               if conf["developer"] else "Developer mode off: only release builds are offered.", "ok")
-        return redirect(url_for("index"))
+        return redirect(url_for("firmware_page"))
 
     @app.get("/api/status")
     @login_required
@@ -341,7 +375,7 @@ def create_app():
         name = secure_filename(file.filename) if file and file.filename else ""
         if not name.lower().endswith(".zip"):
             flash("Choose a firmware .zip file.", "error")
-            return redirect(url_for("index"))
+            return redirect(url_for("firmware_page"))
         token = new_upload(file, name)
         if sdk.is_sdk(upload_zip(token)):
             return start_custom(upload_zip(token), name)
@@ -352,7 +386,7 @@ def create_app():
             session_token = custom.create(path, name)
         except (custom.CustomError, ValueError) as error:
             flash(f"{name}: {error}", "error")
-            return redirect(url_for("index"))
+            return redirect(url_for("firmware_page"))
         finally:
             shutil.rmtree(path.parent, ignore_errors=True)     # the session keeps its own copy
         return redirect(url_for("custom_page", token=session_token))
@@ -385,7 +419,7 @@ def create_app():
             size, limit = session_.estimate()
         except (custom.CustomError, ValueError) as error:
             flash(f"Can't open this SDK: {error}", "error")
-            return redirect(url_for("index"))
+            return redirect(url_for("firmware_page"))
         from .spirom import walk
         tree = [(path, node) for path, node in walk(root)]
         folders = sorted({p for p, n in tree if n.is_dir()}, key=str.lower)
@@ -465,7 +499,7 @@ def create_app():
         except FirmwareError as error:
             flash(f"{path.name} rejected: {error}", "error")
             shutil.rmtree(path.parent, ignore_errors=True)
-            return redirect(url_for("index"))
+            return redirect(url_for("firmware_page"))
         state = config.load_state()
         return render_template("review.html", token=token, release=release.summary(),
                                plan=plan(release, state), state=state, busy=busy_reason())
@@ -476,7 +510,7 @@ def create_app():
         path = upload_zip(token)
         if busy_reason():
             flash(busy_reason(), "error")
-            return redirect(url_for("index"))
+            return redirect(url_for("firmware_page"))
         config.JOB_DIR.mkdir(parents=True, exist_ok=True)
         job = time.strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(3)
         cmd = [sys.executable, "-m", "tfpi.flasher", "flash", str(path), "--name", path.name,
@@ -635,7 +669,7 @@ def create_app():
             reason = status["reason"]
         if reason:
             flash(reason, "error")
-            return redirect(url_for("index"))
+            return redirect(url_for("firmware_page"))
         config.JOB_DIR.mkdir(parents=True, exist_ok=True)
         job = "verify-" + time.strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(3)
         return start_job(job, [sys.executable, "-m", "tfpi.diag", "verify", "--job", job,

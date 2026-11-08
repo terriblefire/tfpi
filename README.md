@@ -36,6 +36,10 @@ curl -fsSL https://terriblefire.github.io/tfpi/install.sh | sudo bash
 ## Deploy firmware
 
 Open `http://<hostname>.local/`. The first visit asks you to choose a password.
+The **Home** page says whether new firmware or a TF Pi software update is
+available; the **Firmware** and **Updates** tabs have the details.
+
+On the **Firmware** tab:
 
 1. Upload a release zip (for example `tf4060r5_2026_04_23_0aac415_12656.zip`).
 2. The review page shows which chips will be flashed. A chip whose image is
@@ -185,8 +189,8 @@ delete and make folders from the list.
 ## Updating the Pi software
 
 The page checks GitHub for a newer tfpi about twice a day (or on **Check for
-updates**) and, if there is one, lists the new commits and an **Update now**
-button. That runs `tfpi-update` with a live log, in its own systemd unit so
+updates**). If there is one, the Home page says so and the **Updates** tab
+lists the new commits with an **Update now** button. That runs `tfpi-update` with a live log, in its own systemd unit so
 the page restarting halfway doesn't stop it.
 
 Only parts whose pinned commit changed in `sources.conf` are rebuilt. a314d is

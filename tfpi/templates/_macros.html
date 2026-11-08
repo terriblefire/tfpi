@@ -1,0 +1,2 @@
+{% macro buildname(b) %}<b>{{ b.version or "developer build" }}</b> <span class="muted">· {{ b.date }}{% if b.short %} · <span class="mono">{{ b.short }}</span>{% endif %}</span>{% endmacro %}
+{% macro getbuild(b, label, cls="") %}<form class="inline" method="post" action="/firmware/get"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="name" value="{{ b.name }}"><button class="{{ cls }}">{{ label }}</button></form>{% endmacro %}

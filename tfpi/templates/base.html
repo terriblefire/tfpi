@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/png" href="/static/favicon.png">
 <title>{% block title %}TF Pi{% endblock %}</title>
 <style>
 :root { --bg:#f6f6f4; --card:#fff; --fg:#1d1d1b; --muted:#6b6b66; --line:#ddd; --accent:#1f6feb; --ok:#1a7f37; --bad:#c62828; --warn:#9a6700; }
@@ -12,6 +13,17 @@ body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.45 system-ui
 header { display:flex; justify-content:space-between; align-items:center; padding:12px 16px; border-bottom:1px solid var(--line); }
 header a { color:var(--fg); text-decoration:none; font-weight:600; }
 header a.tab { font-weight:400; margin-left:18px; color:var(--accent); }
+header a.brand { display:inline-flex; align-items:center; gap:8px; }
+img.logo { height:26px; width:auto; }
+.about { display:flex; gap:16px; align-items:center; }
+.about img { height:84px; width:auto; flex:none; }
+.about p { margin:4px 0; }
+@media (prefers-color-scheme: dark) { img.logo, .about img { background:#f6f6f4; border-radius:6px; padding:2px; } }
+header a.tab.active { color:var(--fg); font-weight:600; border-bottom:2px solid var(--accent); padding-bottom:2px; }
+header nav { display:flex; flex-wrap:wrap; align-items:baseline; row-gap:6px; }
+.card.status h2 a { color:var(--fg); text-decoration:none; }
+.card.status.attention { border-left:4px solid var(--accent); }
+details.card summary { cursor:pointer; color:var(--muted); }
 main { max-width:860px; margin:0 auto; padding:16px; }
 .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:16px; margin-bottom:16px; }
 h1 { font-size:20px; margin:0 0 12px; } h2 { font-size:16px; margin:0 0 10px; }
@@ -40,12 +52,14 @@ fieldset { border:1px solid var(--line); border-radius:6px; margin:0 0 12px; } l
 </style>
 </head>
 <body>
-<header><nav><a href="/">TF Pi{% if board %} · {{ board }}{% endif %}</a>{% if session.user %}<a class="tab" href="/files">Files</a><a class="tab" href="/diag">Diagnostics</a>{% endif %}</nav>
+<header><nav><a href="/" class="brand"><img src="/static/favicon.png" alt="" class="logo">TF Pi{% if board %} · {{ board }}{% endif %}</a>{% if session.user %}{% set here = request.endpoint or "" %}
+{% for href, label, prefix in (("/", "Home", "index"), ("/firmware", "Firmware", "firmware"), ("/updates", "Updates", "updates"), ("/files", "Files", "files"), ("/diag", "Diagnostics", "diag")) %}<a class="tab{{ ' active' if here == prefix or here.startswith(prefix + '_') else '' }}" href="{{ href }}">{{ label }}</a>{% endfor %}{% endif %}</nav>
 {% if session.user %}<form class="inline" method="post" action="/logout"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary">Log out</button></form>{% endif %}
 </header>
 <main>
 {% for category, message in get_flashed_messages(with_categories=true) %}<div class="flash {{ category }}">{{ message }}</div>{% endfor %}
 {% block body %}{% endblock %}
 </main>
+<script>for (const e of document.querySelectorAll(".when")) e.textContent = new Date(e.dataset.t * 1000).toLocaleString([], {dateStyle: "medium", timeStyle: "short"});</script>
 </body>
 </html>
