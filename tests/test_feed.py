@@ -296,3 +296,12 @@ class HomeTests(FeedBase):
         self.assertIn('value="1" checked onchange', self.client.get("/firmware").get_data(as_text=True))
         self.client.post("/settings/developer", data={"csrf": self.csrf()})          # unticked: no field
         self.assertIn('value="1"  onchange', self.client.get("/firmware").get_data(as_text=True))
+
+    def test_updates_tab_update_now_first(self):
+        self.software = {"time": 1, "error": None, "available": True, "installed": "a" * 40,
+                         "latest": "b" * 40, "changes": ["Tabs"], "rebuild": [], "a314d_interrupted": True}
+        self.client.post("/update/check", data={"csrf": self.csrf()})
+        page = self.client.get("/updates").get_data(as_text=True)
+        self.assertLess(page.index("Update now"), page.index("Installed versions"))
+        self.assertIn('class="big" >Update now', page)
+        self.assertIn("a314d will be stopped", page)
