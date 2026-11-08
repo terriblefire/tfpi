@@ -99,3 +99,32 @@ class FlasherTests(Sandbox):
         stored = sorted(p.name for p in config.FIRMWARE_DIR.glob("*.zip"))
         self.assertEqual(len(stored), config.KEEP_RELEASES)
         self.assertIn("r4.zip", stored)
+
+
+    def calls(self):
+        log = self.tmp / "calls.log"
+        return [line for line in log.read_text().splitlines()
+                if line.startswith(("fomu-flash -r", "xc3sprog", "setgpio", "fomu-flash -q"))] if log.exists() else []
+
+    def test_fpga_reset_is_the_last_step(self):
+        self.assertEqual(self.flash(self.release()), 0)
+        # FPGA written, booted (the board-powered check), CPLD, then booted again.
+        self.assertEqual(self.calls(), ["fomu-flash -q -u -w " + str(self.tmp / "state" / "work" / "fpga.bin"),
+                                        "fomu-flash -r", "setgpio", "xc3sprog", "fomu-flash -r", "setgpio"])
+
+    def test_cpld_only_flash_resets_fpga_after(self):
+        self.flash(self.release("a.zip"))
+        (self.tmp / "calls.log").unlink()
+        self.assertEqual(self.flash(self.release("b.zip", cpld=1)), 0)
+        self.assertEqual(self.calls(), ["xc3sprog", "fomu-flash -r", "setgpio"])
+
+    def test_failed_fpga_write_still_releases_the_fpga(self):
+        os.environ["FAKE_FOMU_CORRUPT"] = "1"
+        self.assertEqual(self.flash(self.release()), 1)
+        self.assertEqual(self.calls()[-2:], ["fomu-flash -r", "setgpio"])
+        self.assertEqual(self.cpld_flashes(), 0)
+
+    def test_cpld_failure_still_resets_fpga(self):
+        os.environ["FAKE_XC3_FAIL"] = "1"
+        self.assertEqual(self.flash(self.release()), 1)
+        self.assertEqual(self.calls()[-3:], ["xc3sprog", "fomu-flash -r", "setgpio"])
