@@ -29,7 +29,8 @@ VLINK = os.environ.get("TFPI_VLINK", "vlink")
 ICEBRAM = os.environ.get("TFPI_ICEBRAM", "icebram")
 ICEPACK = os.environ.get("TFPI_ICEPACK", "icepack")
 
-# tf4060v2/ssbl/Makefile
+# The SSBL's link order (tf4060v2/ssbl/Makefile OBJECTS, toc.o last). SDKs list
+# it in ssbl/objects.txt; this is the order of SDKs made before that file.
 SSBL_OBJECTS = ("start.o", "main.o", "reloc.o", "kprintf.o", "spi.o", "spi_asm.o")
 ASFLAGS = ["-quiet", "-Fhunk", "-kick1hunks", "-nosym", "-m68060", "-cnop=0x0000"]
 LDFLAGS = ["-t", "-x", "-Bstatic", "-Bsymbolic", "-Cvbcc", "-s", "-b", "rawbin1", "-q", "-mrel"]
@@ -47,10 +48,12 @@ class Sdk:
     files: dict                      # basename -> bytes (top level)
     ssbl_objects: dict = field(default_factory=dict)   # name -> bytes, may be empty
     toc_i: bytes = None
+    object_order: tuple = SSBL_OBJECTS                 # link order, from ssbl/objects.txt
 
     @property
     def can_relink(self):
-        return self.toc_i is not None and all(n in self.ssbl_objects for n in SSBL_OBJECTS)
+        return (self.toc_i is not None and bool(self.object_order)
+                and all(n in self.ssbl_objects for n in self.object_order))
 
     @property
     def spirom(self):
@@ -67,7 +70,7 @@ def is_sdk(path):
 
 
 def load_sdk(path, name=None):
-    files, objects, toc_i = {}, {}, None
+    files, objects, toc_i, order = {}, {}, None, None
     with zipfile.ZipFile(path) as archive:
         for info in archive.infolist():
             if info.is_dir() or info.file_size > 16 * 1024 * 1024:
@@ -75,17 +78,21 @@ def load_sdk(path, name=None):
             parts = PurePosixPath(info.filename).parts
             base = parts[-1]
             if len(parts) >= 2 and parts[-2] == "ssbl":
-                if base in SSBL_OBJECTS:
+                if base.endswith(".o"):
                     objects[base] = archive.read(info)
                 elif base == "toc.i":
                     toc_i = archive.read(info)
+                elif base == "objects.txt":
+                    order = tuple(archive.read(info).decode("ascii", "replace").split())
             elif base.endswith((".asc", ".mif", ".img", ".md")):
                 files[base] = archive.read(info)
     asc = [n for n in files if n.endswith("_ram.asc")]
     if len(asc) != 1 or "spirom.img" not in files or "bootrom_syn.mif" not in files:
         raise SdkError("not a TF4060 SDK zip (needs *_ram.asc, bootrom_syn.mif, spirom.img)")
+    if order is not None and any(n == "toc.o" or not n.endswith(".o") for n in order):
+        raise SdkError("ssbl/objects.txt in this SDK is not a list of SSBL objects")
     return Sdk(name=name or Path(path).name, board=asc[0][:-len("_ram.asc")], files=files,
-               ssbl_objects=objects, toc_i=toc_i)
+               ssbl_objects=objects, toc_i=toc_i, object_order=order or SSBL_OBJECTS)
 
 
 # --- review ------------------------------------------------------------------
@@ -148,7 +155,7 @@ def link_ssbl(sdk, modules):
         lines.append("    TOC_END")
         (work / "toc.s").write_text("\n".join(lines) + "\n")
         _run([VASM, "toc.s", "-o", "toc.o", *ASFLAGS, "-I."], work)
-        _run([VLINK, *LDFLAGS, *SSBL_OBJECTS, "toc.o", "-o", "spirom.strap"], work)
+        _run([VLINK, *LDFLAGS, *sdk.object_order, "toc.o", "-o", "spirom.strap"], work)
         return spirom.add_crc((work / "spirom.strap").read_bytes())
 
 
