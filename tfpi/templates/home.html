@@ -1,0 +1,49 @@
+{% extends "base.html" %}{% block body %}
+{% import "_macros.html" as m with context %}
+{% include "_banners.html" %}
+{% set fw = firmware %}
+
+<div class="card about">
+<img src="/static/logo.png" alt="TerribleFire">
+<div><h1>TF Pi</h1>
+<p>Firmware, diagnostics and the a314 link for the TerribleFire TF4060 on this Raspberry Pi.</p>
+<p class="muted">Support: <a href="https://discord.gg/4B8743Fm4w">Discord</a> · <a href="https://github.com/terriblefire/tfpi">github.com/terriblefire/tfpi</a></p></div>
+</div>
+
+<div class="card status {{ 'attention' if fw.available or state.cpld.fault else '' }}">
+<h2><a href="/firmware">Firmware</a></h2>
+<p>Installed: {% if fw.installed %}{{ m.buildname(fw.installed) }}{% elif state.release %}<span class="mono">{{ state.release }}</span>{% else %}<span class="muted">unknown (nothing flashed through this page yet)</span>{% endif %}
+{% if state.cpld.fault %}<br><span class="bad">BUS CPLD locked after a failed flash: see the Firmware tab.</span>{% endif %}</p>
+{% if fw.available %}
+<p><b>Update available:</b> {{ m.buildname(fw.latest) }}{% if fw.latest.channel == "dev" %} <span class="warn">not a tested release</span>{% endif %}
+{% if fw.latest.summary %}<br><span class="muted">{{ fw.latest.summary }}</span>{% endif %}</p>
+<p>{{ m.getbuild(fw.latest, "Download and review") }} <span class="muted">Nothing is flashed until you confirm.</span></p>
+{% elif not fw.checked %}<p class="muted">Not checked for new firmware yet.</p>
+{% elif fw.error %}<p class="warn">Couldn't check for new firmware: {{ fw.error }}</p>
+{% else %}<p class="ok">No new firmware{% if not fw.developer %} releases{% endif %}.</p>
+{% endif %}
+<p class="muted"><a href="/firmware">Firmware tab</a>: details, Verify, published builds, upload a zip, rollback.</p>
+</div>
+
+<div class="card status {{ 'attention' if update and update.available else '' }}">
+<h2><a href="/updates">TF Pi software</a></h2>
+{% if update and update.available %}
+<p><b>Update available</b> <span class="mono muted">{{ update.installed[:7] or "?" }} → {{ update.latest[:7] }}</span>
+{% if update.changes %}<br><span class="muted">{{ update.changes[-1] }}{% if update.changes | length > 1 %} (and {{ update.changes | length - 1 }} more){% endif %}</span>{% endif %}</p>
+<p>{% if update.a314d_interrupted %}<span class="warn">a314d will be stopped during this update.</span>{% else %}<span class="muted">a314d keeps running.</span>{% endif %}
+<a href="/updates">Review and update</a></p>
+{% elif not update %}<p class="muted">Not checked for updates yet.</p>
+{% elif update.error %}<p class="warn">Couldn't check for updates: {{ update.error }}</p>
+{% else %}<p class="ok">Up to date.</p>
+{% endif %}
+<p class="muted">a314d: <span class="{{ 'ok' if a314d == 'active' else 'warn' }}">{{ a314d }}</span></p>
+</div>
+
+<form method="post" action="/check-all" style="margin-bottom:16px"><input type="hidden" name="csrf" value="{{ csrf }}">
+<button class="secondary">Check for updates now</button>
+<span class="muted">{% if fw.checked %}Last checked <span class="when" data-t="{{ fw.time | int }}"></span>. {% endif %}The Pi also checks by itself every 12 hours.</span></form>
+
+<details class="card"><summary>Change password</summary>
+<form method="post" action="/password" style="margin-top:10px"><input type="hidden" name="csrf" value="{{ csrf }}">
+<input type="password" name="current" placeholder="Current" required> <input type="password" name="new" placeholder="New" required> <button class="secondary">Change</button></form></details>
+{% endblock %}

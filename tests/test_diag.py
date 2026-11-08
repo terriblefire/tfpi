@@ -189,7 +189,7 @@ class DiagWebBase(DiagBase):
 
 class VerifyTests(DiagWebBase):
     def test_verify_button_reads_back_and_shows_the_result(self):
-        page = self.client.get("/").get_data(as_text=True)
+        page = self.client.get("/firmware").get_data(as_text=True)
         self.assertIn('action="/verify"', page)
         self.assertIn("Verify reads the FPGA&#39;s flash and the CPLD back from the chips", page)
         reply = self.client.post("/verify", data={"csrf": self.csrf()})
@@ -202,7 +202,7 @@ class VerifyTests(DiagWebBase):
         self.assertIn("identify", self.calls())
         self.assertFalse(diag.marker_file().exists())
         self.assertFalse(diag.current_file().exists())
-        page = self.client.get("/").get_data(as_text=True)
+        page = self.client.get("/firmware").get_data(as_text=True)
         self.assertIn("built from git beef123 on 2026-11-06", page)
         self.assertIn("tf4060r5_2026-11-05_f555529", page)
         self.assertIn("Verified</th><td>2026-11-07 11:00:00", page)
@@ -211,7 +211,7 @@ class VerifyTests(DiagWebBase):
         diag.marker_file().parent.mkdir(parents=True, exist_ok=True)
         diag.marker_file().write_text("{}")
         reply = self.client.post("/verify", data={"csrf": self.csrf()})
-        self.assertEqual(reply.headers["Location"], "/")
+        self.assertEqual(reply.headers["Location"], "/firmware")
         self.assertNotIn("identify", self.calls())
 
 

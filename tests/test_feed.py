@@ -18,6 +18,7 @@ class FakeGhcr:
         self.blobs, self.tags = {}, {}
         self.private = False
         self.corrupt = False
+        self.missing = False
         fake = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -35,6 +36,8 @@ class FakeGhcr:
             def do_GET(self):
                 base = f"http://127.0.0.1:{self.server.server_port}"
                 if self.path.startswith("/token"):
+                    if fake.missing:          # ghcr: 403 package not there, 401 private
+                        return self.reply(fake.missing, b'{"errors":[{"code":"DENIED"}]}')
                     return self.reply(200, json.dumps({"token": "anon"}).encode())
                 if self.path.startswith("/storage/"):
                     if self.headers.get("Authorization"):
@@ -154,6 +157,12 @@ class FeedTests(FeedBase):
         self.ghcr.private = True
         self.assertIn("public", feed.check()["error"])
 
+    def test_nothing_published_yet_or_private(self):
+        self.ghcr.missing = 403
+        self.assertEqual(feed.check()["error"], feed.NOT_PUBLISHED)
+        self.ghcr.missing = 401
+        self.assertEqual(feed.check()["error"], feed.NOT_PUBLIC)
+
     def test_versions_from_build_names(self):
         builds = {b["name"]: b for b in feed.check()["builds"]}
         self.assertEqual(builds["v0.6_2026-11-07_abc0002"]["version"], "v0.6")
@@ -186,10 +195,14 @@ class FeedWebTests(FeedBase):
         return self.client.post(path, data={"csrf": self.csrf("/"), **form})
 
     def test_update_offered_and_fetched_into_review(self):
-        self.assertIn("Not checked yet", self.client.get("/").get_data(as_text=True))
+        self.assertIn("Not checked yet", self.client.get("/firmware").get_data(as_text=True))
+        self.assertIn("Not checked for new firmware yet", self.client.get("/").get_data(as_text=True))
         self.post("/firmware/check")
         self.installed(self.builds[3])
-        page = self.client.get("/").get_data(as_text=True)
+        home = self.client.get("/").get_data(as_text=True)                 # the overview says so too
+        self.assertIn("<b>Update available:</b> <b>v0.6</b>", home)
+        self.assertIn('value="v0.6_2026-11-07_abc0002"', home)
+        page = self.client.get("/firmware").get_data(as_text=True)
         self.assertIn("Firmware update available", page)
         self.assertIn("<b>v0.6</b>", page)                                 # the new one, by version
         self.assertIn("Installed: <b>v0.5</b>", page)
@@ -203,13 +216,74 @@ class FeedWebTests(FeedBase):
     def test_dev_builds_need_developer_mode(self):
         self.post("/firmware/check")
         reply = self.post("/firmware/get", name="2026-11-08_dee0001")
-        self.assertEqual(reply.headers["Location"], "/")
+        self.assertEqual(reply.headers["Location"], "/firmware")
         self.post("/settings/developer", on="1")
-        page = self.client.get("/").get_data(as_text=True)
+        page = self.client.get("/firmware").get_data(as_text=True)
         self.assertIn("Recent builds", page)
         self.assertIn("2026-11-08_dee0001", page)
         self.assertIn("<b>developer build</b>", page)
         self.assertIn("not a tested release", page)
         self.assertIn("/review/", self.post("/firmware/get", name="2026-11-08_dee0001").headers["Location"])
         self.post("/settings/developer", on="0")
-        self.assertNotIn("Recent builds", self.client.get("/").get_data(as_text=True))
+        self.assertNotIn("Recent builds", self.client.get("/firmware").get_data(as_text=True))
+
+
+class HomeTests(FeedBase):
+    """The landing page: one line each for firmware and TF Pi software."""
+
+    def setUp(self):
+        super().setUp()
+        from tfpi import update
+        from tfpi.web import create_app
+        self.update = update
+        self._check = update.check
+        self.software = {"time": 1, "error": None, "available": False}
+
+        def fake_check():
+            config.write_json(update.check_file(), dict(self.software))
+            return dict(self.software)
+        update.check = fake_check
+        self.client = create_app().test_client()
+        token = re.search(r'name="csrf" value="([0-9a-f]+)"', self.client.get("/setup").get_data(as_text=True)).group(1)
+        self.client.post("/setup", data={"csrf": token, "password": "secret1", "confirm": "secret1"})
+
+    def tearDown(self):
+        self.update.check = self._check
+        super().tearDown()
+
+    def csrf(self):
+        return re.search(r'name="csrf" value="([0-9a-f]+)"', self.client.get("/").get_data(as_text=True)).group(1)
+
+    def test_tabs_logo_and_favicon(self):
+        page = self.client.get("/").get_data(as_text=True)
+        for href in ("/firmware", "/updates", "/files", "/diag"):
+            self.assertIn(f'href="{href}"', page)
+        self.assertIn('class="tab active" href="/"', page)
+        self.assertIn('class="tab active" href="/updates"', self.client.get("/updates").get_data(as_text=True))
+        self.assertIn("discord.gg/4B8743Fm4w", page)
+        self.assertEqual(self.client.get("/static/favicon.png").status_code, 200)
+        self.client.post("/logout", data={"csrf": self.csrf()})
+        self.assertEqual(self.client.get("/static/logo.png").status_code, 200)    # login page has it too
+
+    def test_check_all_reports_both(self):
+        reply = self.client.post("/check-all", data={"csrf": self.csrf()}, follow_redirects=True)
+        page = reply.get_data(as_text=True)
+        self.assertIn("Found new firmware.", page)
+        self.assertIn("Up to date.", page)                              # TF Pi software
+        self.assertIn("<b>Update available:</b> <b>v0.6</b>", page)
+        self.software = {"time": 1, "error": None, "available": True, "installed": "a" * 40,
+                         "latest": "b" * 40, "changes": ["Firmware tab"], "rebuild": [],
+                         "a314d_interrupted": False}
+        self.installed(self.builds[1])
+        page = self.client.post("/check-all", data={"csrf": self.csrf()}, follow_redirects=True).get_data(as_text=True)
+        self.assertIn("Found a TF Pi software update.", page)
+        self.assertIn("aaaaaaa → bbbbbbb", page)
+        self.assertIn("a314d keeps running.", page)
+        self.assertIn('href="/updates">Review and update', page)
+        updates = self.client.get("/updates").get_data(as_text=True)
+        self.assertIn("Update now", updates)
+        self.assertNotIn("Published firmware", updates)
+
+    def test_update_actions_return_to_updates_tab(self):
+        reply = self.client.post("/update/check", data={"csrf": self.csrf()})
+        self.assertEqual(reply.headers["Location"], "/updates")

@@ -1,0 +1,27 @@
+{% extends "base.html" %}{% block body %}
+{% import "_macros.html" as m with context %}
+{% include "_banners.html" %}
+<div class="card"><h1>TF Pi software</h1>
+<p class="muted">The installer, this web page and the tools it uses (fomu-flash, xc3sprog, a314d).</p><table>
+{% for name, v in versions.items() %}<tr><th>{{ name }}</th><td class="mono">{{ v.ref[:12] if v.ref else "" }} <span class="muted">{{ v.repo }}</span></td></tr>
+{% else %}<tr><td class="muted">no version info (installer not run?)</td></tr>{% endfor %}
+</table>
+{% if update and update.available %}
+<div class="update">
+<p><b>Update available</b> <span class="mono muted">{{ update.installed[:7] or "?" }} → {{ update.latest[:7] }}</span></p>
+{% if update.changes %}<ul class="changes">{% for c in update.changes %}<li>{{ c }}</li>{% endfor %}</ul>{% endif %}
+<p class="muted">Rebuilds: {{ update.rebuild | join(", ") if update.rebuild else "nothing; only the tfpi page and tools" }}.</p>
+{% if update.a314d_interrupted %}
+<p class="warn"><b>a314d will be stopped</b> while a314 is rebuilt (several minutes). The Amiga loses PI0: and the other a314 services until it's back, and may need a reboot afterwards. Close anything using PI0: first.
+{% if update.a314d_local %}<br><b>The a314d on this Pi isn't the one the installer built (a hand-built one?). It will be replaced.</b>{% elif update.a314d_unknown %}<br>If you built a314d by hand on this Pi, it will be replaced.{% endif %}</p>
+{% else %}<p class="ok">a314d keeps running; this page restarts for a few seconds.</p>{% endif %}
+<form method="post" action="/update/start" onsubmit="return confirm({{ ('Update the Pi software now?' ~ (' a314d will be stopped and the Amiga loses PI0: for several minutes.' if update.a314d_interrupted else ' a314d is not touched.')) | tojson | forceescape }})">
+<input type="hidden" name="csrf" value="{{ csrf }}"><button {% if updating or job_state == "running" %}disabled{% endif %}>Update now</button></form>
+</div>
+{% endif %}
+<form method="post" action="/update/check" style="margin-top:10px"><input type="hidden" name="csrf" value="{{ csrf }}">
+<span class="muted">{% if not update %}Not checked for updates yet.{% elif update.error %}<span class="warn">Last check failed: {{ update.error }}</span>{% elif not update.available %}Up to date.{% endif %}
+{% if update %}Checked <span class="when" data-t="{{ update.time | int }}"></span>.{% endif %}</span>
+<button class="secondary">Check for updates</button></form>
+</div>
+{% endblock %}

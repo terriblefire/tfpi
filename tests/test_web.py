@@ -69,7 +69,7 @@ class WebTests(Sandbox):
         self.assertTrue(reply["result"]["ok"], log)
         self.assertIn("CPLD: programmed and verified", log)
 
-        index = self.client.get("/").get_data(as_text=True)
+        index = self.client.get("/firmware").get_data(as_text=True)
         self.assertIn("fw.zip", index)
         self.assertIn("(installed)", index)
         # Rollback/review of the stored zip now says nothing to flash.

@@ -1,0 +1,2 @@
+{% if job and job_state == "running" %}<div class="flash">{{ "A software update" if job.startswith("update-") else "A diagnostic test" if job.startswith("diag") else "A firmware check" if job.startswith("verify-") else "A flash" }} is running. <a href="/job/{{ job }}">Watch it</a>.</div>{% endif %}
+{% include "diag_banner.html" %}

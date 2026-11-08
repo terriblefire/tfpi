@@ -1,11 +1,9 @@
 {% extends "base.html" %}{% block body %}
-{% macro buildname(b) %}<b>{{ b.version or "developer build" }}</b> <span class="muted">· {{ b.date }}{% if b.short %} · <span class="mono">{{ b.short }}</span>{% endif %}</span>{% endmacro %}
-{% macro getbuild(b, label, cls="") %}<form class="inline" method="post" action="/firmware/get"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="name" value="{{ b.name }}"><button class="{{ cls }}">{{ label }}</button></form>{% endmacro %}
-{% if job and job_state == "running" %}<div class="flash">{{ "A software update" if job.startswith("update-") else "A diagnostic test" if job.startswith("diag") else "A firmware check" if job.startswith("verify-") else "A flash" }} is running. <a href="/job/{{ job }}">Watch it</a>.</div>{% endif %}
-{% include "diag_banner.html" %}
+{% import "_macros.html" as m with context %}
+{% include "_banners.html" %}
 <div class="card"><h1>Installed firmware</h1>
 <table>
-<tr><th>Release</th><td>{% if firmware.installed %}{{ buildname(firmware.installed) }}<br>{% endif %}{% if state.release %}<span class="mono">{{ state.release }}</span>{% else %}<span class="muted">unknown (nothing flashed through this page yet)</span>{% endif %}</td></tr>
+<tr><th>Release</th><td>{% if firmware.installed %}{{ m.buildname(firmware.installed) }}<br>{% endif %}{% if state.release %}<span class="mono">{{ state.release }}</span>{% else %}<span class="muted">unknown (nothing flashed through this page yet)</span>{% endif %}</td></tr>
 <tr><th>Seed</th><td>{{ state.seed or "-" }}</td></tr>
 <tr><th>RAM FPGA</th><td>{% if state.fpga.sha %}<span class="mono">{{ state.fpga.sha[:16] }}</span>{% else %}<span class="muted">unknown</span>{% endif %}
   <span class="muted">· {{ state.fpga.flashes }} flashes{% if state.fpga.time %} · last {{ state.fpga.time }}{% endif %}</span>
@@ -30,20 +28,20 @@
 {% set fw = firmware %}
 {% if fw.available %}
 <div class="update">
-<p><b>Firmware update available</b>: {{ buildname(fw.latest) }}
+<p><b>Firmware update available</b>: {{ m.buildname(fw.latest) }}
 {% if fw.latest.channel == "dev" %} <span class="warn">not a tested release</span>{% endif %}
-{% if fw.installed %}<br><span class="muted">Installed: {{ buildname(fw.installed) }}</span>{% endif %}</p>
+{% if fw.installed %}<br><span class="muted">Installed: {{ m.buildname(fw.installed) }}</span>{% endif %}</p>
 {% if fw.latest.summary %}<p>{{ fw.latest.summary }}</p>{% endif %}
-<p>{{ getbuild(fw.latest, "Download and review") }} <span class="muted">Nothing is flashed until you confirm on the next page.</span></p>
+<p>{{ m.getbuild(fw.latest, "Download and review") }} <span class="muted">Nothing is flashed until you confirm on the next page.</span></p>
 </div>
-{% elif fw.installed_newer %}<p class="muted">The installed build ({{ buildname(fw.installed) }}) is newer than the newest release.</p>
-{% elif fw.installed %}<p><span class="ok">Up to date:</span> {{ buildname(fw.installed) }} is the newest {{ "build" if fw.developer else "release" }}.</p>
+{% elif fw.installed_newer %}<p class="muted">The installed build ({{ m.buildname(fw.installed) }}) is newer than the newest release.</p>
+{% elif fw.installed %}<p><span class="ok">Up to date:</span> {{ m.buildname(fw.installed) }} is the newest {{ "build" if fw.developer else "release" }}.</p>
 {% endif %}
 {% if fw.recent %}<h3>Recent builds</h3><table>
-{% for b in fw.recent %}<tr><td>{{ buildname(b) }} {% if b.channel == "release" %}<span class="ok">release</span>{% endif %}
+{% for b in fw.recent %}<tr><td>{{ m.buildname(b) }} {% if b.channel == "release" %}<span class="ok">release</span>{% endif %}
 {% if fw.installed and b.name == fw.installed.name %} <span class="ok">(installed)</span>{% endif %}
 {% if b.summary %}<br><span class="muted">{{ b.summary }}</span>{% endif %}</td>
-<td style="width:1%">{{ getbuild(b, "Review", "secondary") }}</td></tr>{% endfor %}
+<td style="width:1%">{{ m.getbuild(b, "Review", "secondary") }}</td></tr>{% endfor %}
 </table>{% endif %}
 <form method="post" action="/firmware/check" style="margin-top:10px"><input type="hidden" name="csrf" value="{{ csrf }}">
 <span class="muted">{% if not fw.checked %}Not checked yet.{% elif fw.error %}<span class="warn">Last check failed: {{ fw.error }}</span>{% elif not fw.latest %}No {{ "builds" if fw.developer else "releases" }} published yet.{% endif %}
@@ -74,32 +72,4 @@
 {% for h in state.history[:15] %}<tr><td>{{ h.time }}</td><td class="mono">{{ h.release }}<br><span class="muted">FPGA {{ h.fpga }} · CPLD {{ h.cpld }}</span></td>
 <td class="{{ 'ok' if h.result == 'ok' else 'muted' if h.result == 'nothing to do' else 'bad' }}">{{ h.result }}</td></tr>{% endfor %}
 </table></div>{% endif %}
-
-<div class="card"><h2>Software on this Pi</h2><table>
-{% for name, v in versions.items() %}<tr><th>{{ name }}</th><td class="mono">{{ v.ref[:12] if v.ref else "" }} <span class="muted">{{ v.repo }}</span></td></tr>
-{% else %}<tr><td class="muted">no version info (installer not run?)</td></tr>{% endfor %}
-</table>
-{% if update and update.available %}
-<div class="update">
-<p><b>Update available</b> <span class="mono muted">{{ update.installed[:7] or "?" }} → {{ update.latest[:7] }}</span></p>
-{% if update.changes %}<ul class="changes">{% for c in update.changes %}<li>{{ c }}</li>{% endfor %}</ul>{% endif %}
-<p class="muted">Rebuilds: {{ update.rebuild | join(", ") if update.rebuild else "nothing; only the tfpi page and tools" }}.</p>
-{% if update.a314d_interrupted %}
-<p class="warn"><b>a314d will be stopped</b> while a314 is rebuilt (several minutes). The Amiga loses PI0: and the other a314 services until it's back, and may need a reboot afterwards. Close anything using PI0: first.
-{% if update.a314d_local %}<br><b>The a314d on this Pi isn't the one the installer built (a hand-built one?). It will be replaced.</b>{% elif update.a314d_unknown %}<br>If you built a314d by hand on this Pi, it will be replaced.{% endif %}</p>
-{% else %}<p class="ok">a314d keeps running; this page restarts for a few seconds.</p>{% endif %}
-<form method="post" action="/update/start" onsubmit="return confirm({{ ('Update the Pi software now?' ~ (' a314d will be stopped and the Amiga loses PI0: for several minutes.' if update.a314d_interrupted else ' a314d is not touched.')) | tojson | forceescape }})">
-<input type="hidden" name="csrf" value="{{ csrf }}"><button {% if updating or job_state == "running" %}disabled{% endif %}>Update now</button></form>
-</div>
-{% endif %}
-<form method="post" action="/update/check" style="margin-top:10px"><input type="hidden" name="csrf" value="{{ csrf }}">
-<span class="muted">{% if not update %}Not checked for updates yet.{% elif update.error %}<span class="warn">Last check failed: {{ update.error }}</span>{% elif not update.available %}Up to date.{% endif %}
-{% if update %}Checked <span class="when" data-t="{{ update.time | int }}"></span>.{% endif %}</span>
-<button class="secondary">Check for updates</button></form>
-<script>for (const e of document.querySelectorAll(".when")) e.textContent = new Date(e.dataset.t * 1000).toLocaleString([], {dateStyle: "medium", timeStyle: "short"});</script>
-</div>
-
-<div class="card"><h2>Change password</h2>
-<form method="post" action="/password"><input type="hidden" name="csrf" value="{{ csrf }}">
-<input type="password" name="current" placeholder="Current" required> <input type="password" name="new" placeholder="New" required> <button class="secondary">Change</button></form></div>
 {% endblock %}
