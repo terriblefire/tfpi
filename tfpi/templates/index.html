@@ -1,9 +1,11 @@
 {% extends "base.html" %}{% block body %}
+{% macro buildname(b) %}<b>{{ b.version or "developer build" }}</b> <span class="muted">· {{ b.date }}{% if b.short %} · <span class="mono">{{ b.short }}</span>{% endif %}</span>{% endmacro %}
+{% macro getbuild(b, label, cls="") %}<form class="inline" method="post" action="/firmware/get"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="name" value="{{ b.name }}"><button class="{{ cls }}">{{ label }}</button></form>{% endmacro %}
 {% if job and job_state == "running" %}<div class="flash">{{ "A software update" if job.startswith("update-") else "A diagnostic test" if job.startswith("diag") else "A firmware check" if job.startswith("verify-") else "A flash" }} is running. <a href="/job/{{ job }}">Watch it</a>.</div>{% endif %}
 {% include "diag_banner.html" %}
 <div class="card"><h1>Installed firmware</h1>
 <table>
-<tr><th>Release</th><td>{% if state.release %}<span class="mono">{{ state.release }}</span>{% else %}<span class="muted">unknown (nothing flashed through this page yet)</span>{% endif %}</td></tr>
+<tr><th>Release</th><td>{% if firmware.installed %}{{ buildname(firmware.installed) }}<br>{% endif %}{% if state.release %}<span class="mono">{{ state.release }}</span>{% else %}<span class="muted">unknown (nothing flashed through this page yet)</span>{% endif %}</td></tr>
 <tr><th>Seed</th><td>{{ state.seed or "-" }}</td></tr>
 <tr><th>RAM FPGA</th><td>{% if state.fpga.sha %}<span class="mono">{{ state.fpga.sha[:16] }}</span>{% else %}<span class="muted">unknown</span>{% endif %}
   <span class="muted">· {{ state.fpga.flashes }} flashes{% if state.fpga.time %} · last {{ state.fpga.time }}{% endif %}</span>
@@ -22,6 +24,36 @@
 </table>{% endif %}
 <form method="post" action="/verify" onsubmit="return confirm({{ (verify_warning ~ ' ' ~ warning_screen) | tojson | forceescape }})"><input type="hidden" name="csrf" value="{{ csrf }}">
 <button class="secondary" {% if job_state == "running" %}disabled{% endif %}>Verify</button> <span class="muted">{{ verify_warning }}</span></form>
+</div>
+
+<div class="card"><h2>Published firmware</h2>
+{% set fw = firmware %}
+{% if fw.available %}
+<div class="update">
+<p><b>Firmware update available</b>: {{ buildname(fw.latest) }}
+{% if fw.latest.channel == "dev" %} <span class="warn">not a tested release</span>{% endif %}
+{% if fw.installed %}<br><span class="muted">Installed: {{ buildname(fw.installed) }}</span>{% endif %}</p>
+{% if fw.latest.summary %}<p>{{ fw.latest.summary }}</p>{% endif %}
+<p>{{ getbuild(fw.latest, "Download and review") }} <span class="muted">Nothing is flashed until you confirm on the next page.</span></p>
+</div>
+{% elif fw.installed_newer %}<p class="muted">The installed build ({{ buildname(fw.installed) }}) is newer than the newest release.</p>
+{% elif fw.installed %}<p><span class="ok">Up to date:</span> {{ buildname(fw.installed) }} is the newest {{ "build" if fw.developer else "release" }}.</p>
+{% endif %}
+{% if fw.recent %}<h3>Recent builds</h3><table>
+{% for b in fw.recent %}<tr><td>{{ buildname(b) }} {% if b.channel == "release" %}<span class="ok">release</span>{% endif %}
+{% if fw.installed and b.name == fw.installed.name %} <span class="ok">(installed)</span>{% endif %}
+{% if b.summary %}<br><span class="muted">{{ b.summary }}</span>{% endif %}</td>
+<td style="width:1%">{{ getbuild(b, "Review", "secondary") }}</td></tr>{% endfor %}
+</table>{% endif %}
+<form method="post" action="/firmware/check" style="margin-top:10px"><input type="hidden" name="csrf" value="{{ csrf }}">
+<span class="muted">{% if not fw.checked %}Not checked yet.{% elif fw.error %}<span class="warn">Last check failed: {{ fw.error }}</span>{% elif not fw.latest %}No {{ "builds" if fw.developer else "releases" }} published yet.{% endif %}
+{% if fw.checked %}Checked <span class="when" data-t="{{ fw.time | int }}"></span>.{% endif %}</span>
+<button class="secondary">Check for firmware</button></form>
+<form method="post" action="/settings/developer" style="margin-top:10px"><input type="hidden" name="csrf" value="{{ csrf }}">
+<input type="hidden" name="on" value="{{ '0' if fw.developer else '1' }}">
+<label class="muted">Developer mode: <b>{{ "on" if fw.developer else "off" }}</b></label>
+<button class="secondary">{{ "Turn off" if fw.developer else "Turn on" }}</button>
+<span class="muted">{{ "Developer builds (untagged) are listed and offered as updates." if fw.developer else "Also offers developer builds (untagged, not tested releases) and lists recent builds." }}</span></form>
 </div>
 
 <div class="card"><h2>Deploy new firmware</h2>

@@ -45,6 +45,28 @@ Open `http://<hostname>.local/`. The first visit asks you to choose a password.
 The page keeps the last three releases for rollback, a history of flashes, and
 how many times each chip has been programmed.
 
+### Published firmware
+
+The Pi checks `ghcr.io/terriblefire/tf4060-firmware` for new builds (every 12
+hours, or with **Check for firmware**). When a newer release is published, the
+main page shows **Firmware update available**; **Download and review** fetches
+it into the normal review page, and nothing is flashed until you confirm.
+
+Releases are the tagged builds and show their tag (e.g. **v0.1**).
+**Developer mode** (switch on the main page) also offers developer builds (the
+untagged `vLATEST` builds, not tested releases) and lists the recent builds so
+you can pick an older one.
+
+The installed build is recognised by its FPGA and CPLD images, so it doesn't
+matter what the zip was called or how it got onto the Pi.
+
+Builds are published by hand from the tf4060v2 repo (Gitea Actions, the
+`publish` workflow, `scripts/ghcr_publish.py`): pick a tag to publish a release,
+or `vLATEST` to publish a developer build. The build published last is the one
+offered, so publishing an older release again rolls the Pis back to it.
+To check what's published from a Pi: `python3 -m tfpi.feed`
+(in `/opt/tfpi/lib`).
+
 ### Release zip contents
 
 | File | Needed | Notes |
