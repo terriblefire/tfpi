@@ -15,6 +15,13 @@ TF4060V2 = ROOT.parent / "tf4060v2"
 REAL_BUILD = TF4060V2 / "ssbl" / "build"
 
 
+def makefile_objects():
+    """tf4060v2/ssbl/Makefile's OBJECTS without toc.o (what mksdk.sh writes to objects.txt)."""
+    text = (TF4060V2 / "ssbl" / "Makefile").read_text()
+    names = re.search(r"^OBJECTS\s*:=\s*\$\(addprefix \$\(BUILD\)/,(.*)\)\s*$", text, re.M).group(1).split()
+    return tuple(n for n in names if n != "toc.o")
+
+
 def hunk(name, idstring, romtag=True, version=1):
     """A one-hunk AmigaOS executable, optionally holding a Resident."""
     body = bytearray(64)
@@ -90,13 +97,36 @@ class SpiromTests(Sandbox):
         if not (os.environ.get("TFPI_VASM") and (REAL_BUILD / "main.o").exists()):
             self.skipTest("vasm/vlink or the SSBL objects not available")
         from tfpi import sdk
-        objects = {n: (REAL_BUILD / n).read_bytes() for n in sdk.SSBL_OBJECTS}
+        order = makefile_objects()
+        objects = {n: (REAL_BUILD / n).read_bytes() for n in order}
         kit = sdk.Sdk("t", "tf4060r5", {"spirom.img": (REAL_BUILD / "spirom.img").read_bytes()}, objects,
-                      (TF4060V2 / "ssbl" / "src" / "toc.i").read_bytes())
+                      (TF4060V2 / "ssbl" / "src" / "toc.i").read_bytes(), order)
         sdk.check_relink(kit, sdk.read_spirom(kit.spirom))
 
+    def test_sdk_object_order(self):
+        """The link order comes from ssbl/objects.txt; SDKs without it use the old list."""
+        from tfpi import sdk
+        new = ("start.o", "main.o", "reloc.o", "kprintf.o", "spi.o", "notice.o", "spi_asm.o")
+        kit = sdk.load_sdk(make_sdk(self.tmp / "new.zip", [hunk("a", "a 1")], objects=True, order=new))
+        self.assertEqual(kit.object_order, new)
+        self.assertTrue(kit.can_relink)
+        old = sdk.load_sdk(make_sdk(self.tmp / "old.zip", [hunk("a", "a 1")], objects=True))
+        self.assertEqual(old.object_order, sdk.SSBL_OBJECTS)
+        self.assertTrue(old.can_relink)
+        # objects.txt names an object the SDK does not carry: no relink
+        with zipfile.ZipFile(self.tmp / "new.zip") as src, zipfile.ZipFile(self.tmp / "gap.zip", "w") as dst:
+            for info in src.infolist():
+                if not info.filename.endswith("/notice.o"):
+                    dst.writestr(info, src.read(info))
+        self.assertFalse(sdk.load_sdk(self.tmp / "gap.zip").can_relink)
 
-def make_sdk(path, modules, objects=False):
+
+LEGACY_OBJECTS = ("start.o", "main.o", "reloc.o", "kprintf.o", "spi.o", "spi_asm.o")
+
+
+def make_sdk(path, modules, objects=False, order=None):
+    """An SDK zip; objects: ship ssbl/*.o (LEGACY_OBJECTS, or `order`) and toc.i;
+    order: also ship ssbl/objects.txt with that link order."""
     image = spirom.make_image(ssbl(modules), spirom.build_romfs("TF4060", tree()))
     with zipfile.ZipFile(path, "w") as archive:
         base = "tf4060r5_x_SDK/"
@@ -105,8 +135,10 @@ def make_sdk(path, modules, objects=False):
         archive.writestr(base + "fsbl.mif", "4e\n71\n")
         archive.writestr(base + "spirom.img", image)
         if objects:
-            for name in ("start.o", "main.o", "reloc.o", "kprintf.o", "spi.o", "spi_asm.o", "toc.i"):
+            for name in (*(order or LEGACY_OBJECTS), "toc.i"):
                 archive.writestr(base + "ssbl/" + name, b"obj")
+        if order is not None:
+            archive.writestr(base + "ssbl/objects.txt", "\n".join(order) + "\n")
     return Path(path)
 
 
