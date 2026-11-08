@@ -287,3 +287,12 @@ class HomeTests(FeedBase):
     def test_update_actions_return_to_updates_tab(self):
         reply = self.client.post("/update/check", data={"csrf": self.csrf()})
         self.assertEqual(reply.headers["Location"], "/updates")
+
+    def test_firmware_tab_check_first_and_developer_switch(self):
+        page = self.client.get("/firmware").get_data(as_text=True)
+        self.assertLess(page.index("Check for new firmware"), page.index("Installed firmware"))
+        self.assertIn('type="checkbox" name="on" value="1"  onchange', page)       # off
+        self.client.post("/settings/developer", data={"csrf": self.csrf(), "on": "1"})
+        self.assertIn('value="1" checked onchange', self.client.get("/firmware").get_data(as_text=True))
+        self.client.post("/settings/developer", data={"csrf": self.csrf()})          # unticked: no field
+        self.assertIn('value="1"  onchange', self.client.get("/firmware").get_data(as_text=True))
