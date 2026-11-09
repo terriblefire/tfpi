@@ -130,30 +130,46 @@ else
 fi
 
 # --- vasm + vlink (SSBL relink for the SPI ROM editor) -----------------------
-# tarball NAME URL SHA256 -> $SRC/NAME (checked, unpacked)
+# tarball NAME URL SHA256 -> $SRC/NAME (checked, unpacked). Tries the upstream
+# URL, then our copy in DEPS_MIRROR; the checksum must match either way.
 tarball() {
-	local file=$SRC/dl/$(basename "$2")
+	local file=$SRC/dl/$(basename "$2") url
 	mkdir -p "$SRC/dl"
-	[ -f "$file" ] && echo "$3  $file" | sha256sum -c --quiet 2>/dev/null || curl -fsSL -o "$file" "$2"
-	echo "$3  $file" | sha256sum -c --quiet
+	if ! { [ -f "$file" ] && echo "$3  $file" | sha256sum -c --quiet 2>/dev/null; }; then
+		for url in "$2" "${DEPS_MIRROR:+$DEPS_MIRROR/$(basename "$2")}"; do
+			[ -n "$url" ] || continue
+			rm -f "$file"
+			curl -fsSL --retry 2 -o "$file" "$url" && echo "$3  $file" | sha256sum -c --quiet && break
+			echo "$1: download failed or checksum wrong: $url" >&2
+		done
+	fi
+	echo "$3  $file" | sha256sum -c --quiet || return 1
 	rm -rf "$SRC/$1" && mkdir -p "$SRC/$1"
 	tar -xzf "$file" -C "$SRC/$1" --strip-components=1
 }
-if [ "$(cat /usr/local/share/tfpi/vasm.url 2>/dev/null)" != "$VASM_URL" ] || ! command -v vasmm68k_mot >/dev/null; then
-	tarball vasm "$VASM_URL" "$VASM_SHA256"
-	make -C "$SRC/vasm" CPU=m68k SYNTAX=mot -j"$(nproc)"
+# Only the SPI ROM editor's SSBL relink needs these, so a failure here is a
+# warning: the rest of the install (flashing, a314) must still finish.
+build_vasm() {
+	tarball vasm "$VASM_URL" "$VASM_SHA256" || return 1
+	make -C "$SRC/vasm" CPU=m68k SYNTAX=mot -j"$(nproc)" || return 1
 	install -m755 "$SRC/vasm/vasmm68k_mot" /usr/local/bin/vasmm68k_mot
 	install -d /usr/local/share/tfpi && echo "$VASM_URL" > /usr/local/share/tfpi/vasm.url
-fi
-if [ "$(cat /usr/local/share/tfpi/vlink.url 2>/dev/null)" != "$VLINK_URL" ] || ! command -v vlink >/dev/null; then
-	tarball vlink "$VLINK_URL" "$VLINK_SHA256"
+}
+build_vlink() {
+	tarball vlink "$VLINK_URL" "$VLINK_SHA256" || return 1
 	mkdir -p "$SRC/vlink/objects"
-	make -C "$SRC/vlink" -j"$(nproc)"
+	make -C "$SRC/vlink" -j"$(nproc)" || return 1
 	install -m755 "$SRC/vlink/vlink" /usr/local/bin/vlink
 	install -d /usr/local/share/tfpi && echo "$VLINK_URL" > /usr/local/share/tfpi/vlink.url
+}
+if [ "$(cat /usr/local/share/tfpi/vasm.url 2>/dev/null)" != "$VASM_URL" ] || ! command -v vasmm68k_mot >/dev/null; then
+	build_vasm || echo "WARNING: vasm not installed; the SPI ROM editor can't relink the SSBL until tfpi-update succeeds" >&2
 fi
-vasmm68k_mot -v 2>&1 | head -1
-vlink -v 2>&1 | head -1
+if [ "$(cat /usr/local/share/tfpi/vlink.url 2>/dev/null)" != "$VLINK_URL" ] || ! command -v vlink >/dev/null; then
+	build_vlink || echo "WARNING: vlink not installed; the SPI ROM editor can't relink the SSBL until tfpi-update succeeds" >&2
+fi
+vasmm68k_mot -v 2>&1 | head -1 || true
+vlink -v 2>&1 | head -1 || true
 
 # --- a314 (TF build) via its own installer ----------------------------------
 # install-pi.sh builds as $SUDO_USER, so the checkout belongs to the Pi user.
