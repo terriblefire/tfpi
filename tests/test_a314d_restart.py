@@ -1,4 +1,4 @@
-"""a314d restarts after it exits (Gitea #59): tfpi's systemd drop-in."""
+"""a314d restarts after it exits: tfpi's systemd drop-in."""
 import configparser
 import unittest
 from pathlib import Path
