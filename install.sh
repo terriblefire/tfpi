@@ -199,6 +199,9 @@ for tool in tfpi-flash tfpi-update; do
 done
 [ -f /etc/tfpi/tfpi.conf ] || echo "BOARD=$BOARD" > /etc/tfpi/tfpi.conf
 install -m644 "$self_dir/systemd/tfpi-web.service" /etc/systemd/system/tfpi-web.service
+# a314d comes back after it exits; the unit itself is a314's.
+install -d /etc/systemd/system/a314d.service.d
+install -m644 "$self_dir/systemd/a314d.service.d/tfpi-restart.conf" /etc/systemd/system/a314d.service.d/tfpi-restart.conf
 
 # ref: what is installed. a314d_sha256: the a314d this installer built (the
 # page uses it to warn when a locally built a314d would be replaced).

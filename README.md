@@ -218,6 +218,8 @@ Pinned in [`sources.conf`](sources.conf):
 - `xc3sprog` from arkadiuszmakarenko/xc3sprog (cable `gpiod_creator`) → `/usr/local/bin/xc3sprog`
 - a314 from erique/a314 branch `tf4060`, installed with its own `install-pi.sh tf`
   (a314d, SPI overlay, config.txt/cmdline.txt changes, a314 Python services)
+  - a314d restarts by itself if it exits (systemd drop-in
+    `/etc/systemd/system/a314d.service.d/tfpi-restart.conf`); `systemctl stop a314d` keeps it stopped
 - vasm 2.0d and vlink 0.18a built from source (SHA-256 pinned), `fpga-icestorm` from apt:
   used by the SPI ROM editor
 - this repo → `/opt/tfpi`, web page as `tfpi-web.service` on port 80
