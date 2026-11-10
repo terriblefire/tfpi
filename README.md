@@ -208,7 +208,18 @@ sudo tfpi-flash inspect release.zip
 sudo tfpi-flash flash release.zip [--force-fpga] [--force-cpld]
 sudo tfpi-flash clear-cpld-fault
 sudo tfpi-update          # rebuild at the commits pinned in sources.conf
+tfpi-romfs list IMAGE                 # resident modules and ROMFS files
+tfpi-romfs unpack IMAGE DIR           # ssbl.bin, modules/, romfs/ into DIR
+tfpi-romfs pack DIR spirom.img        # rebuild the SPI ROM from DIR
+tfpi-romfs pack DIR out_ram_flash.bin --bitstream IMAGE   # full flash image
 ```
+
+`tfpi-romfs` takes a spirom.img, a `*_ram_flash.bin`, a release zip or an SDK
+zip. It also runs off the Pi: `python3 -m tfpi.romfs ...` from a checkout,
+plain Python 3, nothing to install. Unpacking and packing an unchanged tree
+gives the same bytes. `pack` reuses the SSBL as it is, so it changes ROMFS
+files only; changing the resident modules needs the SSBL relink in the SPI ROM
+editor (Firmware tab).
 
 ## What gets installed
 

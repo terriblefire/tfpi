@@ -194,7 +194,7 @@ cp -r "$self_dir/tfpi" "$PREFIX/lib/tfpi"
 cp -r "$self_dir/tfdiag" "$PREFIX/lib/tfdiag"     # Diagnostics tab (python3 -m tfdiag)
 find "$PREFIX/lib/tfpi" "$PREFIX/lib/tfdiag" -name __pycache__ -prune -exec rm -rf {} +
 install -m755 "$self_dir/share/setgpio.sh" "$PREFIX/setgpio.sh"
-for tool in tfpi-flash tfpi-update; do
+for tool in tfpi-flash tfpi-update tfpi-romfs; do
 	install -m755 "$self_dir/bin/$tool" "/usr/local/bin/$tool"
 done
 [ -f /etc/tfpi/tfpi.conf ] || echo "BOARD=$BOARD" > /etc/tfpi/tfpi.conf

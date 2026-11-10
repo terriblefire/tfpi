@@ -1,0 +1,3 @@
+#!/bin/sh
+# Unpack/repack the SPI ROM (SSBL + ROMFS): tfpi-romfs list|unpack|pack ...
+PYTHONPATH=/opt/tfpi/lib exec python3 -m tfpi.romfs "$@"
