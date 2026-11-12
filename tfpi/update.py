@@ -44,6 +44,33 @@ class UpdateError(RuntimeError):
     pass
 
 
+SHA = re.compile(r"[0-9a-f]{40}")
+# sources.conf ref key -> the key of the repo it is a ref in
+REPO_OF = {"FOMU_FLASH_REF": "FOMU_FLASH_REPO", "XC3SPROG_REF": "XC3SPROG_REPO",
+           "XC3SPROG_REF_GPIOD1": "XC3SPROG_REPO", "A314_REF": "A314_REPO"}
+
+
+def ls_remote(repo, branch):
+    try:
+        out = subprocess.run(["git", "ls-remote", repo, f"refs/heads/{branch}"], capture_output=True,
+                             text=True, timeout=TIMEOUT)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise UpdateError(f"can't reach {repo}: {error}") from error
+    if out.returncode or not out.stdout.strip():
+        raise UpdateError(f"can't read branch {branch} of {repo}")
+    return out.stdout.split()[0]
+
+
+def resolve_pins(pins):
+    """Refs that are branches (A314_REF=tf4060) -> the commit the branch is at now."""
+    out = dict(pins)
+    for key, repo_key in REPO_OF.items():
+        ref = pins.get(key)
+        if ref and not SHA.fullmatch(ref) and pins.get(repo_key):
+            out[key] = ls_remote(pins[repo_key], ref)
+    return out
+
+
 def check_file():
     return config.STATE_DIR / "update_check.json"
 
@@ -114,7 +141,8 @@ def compare(installed, head, pins):
     built = a314.get("a314d_sha256") or None
     current = sha256(A314D)
     return {
-        "available": bool(head) and head != tfpi_ref,
+        # also when a followed branch (a314 tf4060) has moved on
+        "available": bool(head) and (head != tfpi_ref or bool(parts)),
         "installed": tfpi_ref,
         "latest": head,
         "rebuild": parts,
@@ -131,7 +159,7 @@ def check():
     result = {"time": time.time(), "error": None}
     try:
         head = remote_head()
-        result.update(compare(installed, head, remote_pins(head)))
+        result.update(compare(installed, head, resolve_pins(remote_pins(head))))
         if result["available"] and result["installed"]:
             result["changes"] = remote_changes(result["installed"], head)
     except (UpdateError, OSError, ValueError) as error:
