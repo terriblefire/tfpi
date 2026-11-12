@@ -30,8 +30,7 @@ UPDATE_CMD = os.environ.get("TFPI_UPDATE_CMD", "/usr/local/bin/tfpi-update")
 SYSTEMD_RUN = os.environ.get("TFPI_SYSTEMD_RUN", "systemd-run")
 A314D = Path(os.environ.get("TFPI_A314D", "/opt/a314/a314d"))
 BOOT_FILES = [Path(p) for p in os.environ.get(
-    "TFPI_BOOT_FILES", "/boot/firmware/config.txt:/boot/firmware/cmdline.txt:"
-    "/boot/firmware/overlays/spi-a314.dtbo").split(":")]   # a314's SPI overlay (GPIO7 handshake, #123)
+    "TFPI_BOOT_FILES", "/boot/firmware/config.txt:/boot/firmware/cmdline.txt").split(":")]
 CHECK_EVERY = 12 * 3600
 TIMEOUT = 20
 
@@ -42,33 +41,6 @@ PINS = {"fomu-flash": ("FOMU_FLASH_REF",), "xc3sprog": ("XC3SPROG_REF", "XC3SPRO
 
 class UpdateError(RuntimeError):
     pass
-
-
-SHA = re.compile(r"[0-9a-f]{40}")
-# sources.conf ref key -> the key of the repo it is a ref in
-REPO_OF = {"FOMU_FLASH_REF": "FOMU_FLASH_REPO", "XC3SPROG_REF": "XC3SPROG_REPO",
-           "XC3SPROG_REF_GPIOD1": "XC3SPROG_REPO", "A314_REF": "A314_REPO"}
-
-
-def ls_remote(repo, branch):
-    try:
-        out = subprocess.run(["git", "ls-remote", repo, f"refs/heads/{branch}"], capture_output=True,
-                             text=True, timeout=TIMEOUT)
-    except (OSError, subprocess.TimeoutExpired) as error:
-        raise UpdateError(f"can't reach {repo}: {error}") from error
-    if out.returncode or not out.stdout.strip():
-        raise UpdateError(f"can't read branch {branch} of {repo}")
-    return out.stdout.split()[0]
-
-
-def resolve_pins(pins):
-    """Refs that are branches (A314_REF=tf4060) -> the commit the branch is at now."""
-    out = dict(pins)
-    for key, repo_key in REPO_OF.items():
-        ref = pins.get(key)
-        if ref and not SHA.fullmatch(ref) and pins.get(repo_key):
-            out[key] = ls_remote(pins[repo_key], ref)
-    return out
 
 
 def check_file():
@@ -151,8 +123,7 @@ def compare(installed, head, pins):
     built = a314.get("a314d_sha256") or None
     current = sha256(A314D)
     return {
-        # also when a followed branch (a314 tf4060) has moved on
-        "available": bool(head) and (head != tfpi_ref or bool(parts)),
+        "available": bool(head) and head != tfpi_ref,
         "installed": tfpi_ref,
         "latest": head,
         "rebuild": parts,
@@ -169,7 +140,7 @@ def check():
     result = {"time": time.time(), "error": None}
     try:
         head = remote_head()
-        result.update(compare(installed, head, resolve_pins(remote_pins(head))))
+        result.update(compare(installed, head, remote_pins(head)))
         if result["available"]:
             result["latest_version"] = remote_version(head)
         if result["available"] and result["installed"]:
@@ -249,7 +220,7 @@ def run(log, result):
         reboot = boot_before != [sha256(p) for p in BOOT_FILES]
         os.sync()
         if rc == 0:
-            summary = "updated" + ("; boot files (config.txt, cmdline.txt or the a314 SPI overlay) changed, reboot the Pi (and the Amiga) to use them"
+            summary = "updated" + ("; config.txt/cmdline.txt changed, reboot the Pi (and the Amiga) to use it"
                                    if reboot else "")
         else:
             summary = f"tfpi-update exited with status {rc}; the log above says where it stopped"
