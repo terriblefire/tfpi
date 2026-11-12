@@ -172,7 +172,7 @@ class Hw:
     def spi(self):
         from . import spi as S
         dev = self._spi_factory() if self._spi_factory else S.open_device(self.cfg)
-        s = S.Spi(dev)
+        s = S.Spi(dev, bus=None if self._spi_factory else S.open_bus())
         try:
             yield s
         finally:
