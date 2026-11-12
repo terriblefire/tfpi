@@ -4,8 +4,6 @@ a314d must be stopped: it owns spidev0.0 when it runs.
 Framing details live in protocol.py.
 """
 
-import mmap
-import os
 import struct
 import time
 
@@ -14,97 +12,6 @@ from . import protocol as P
 
 class SpiError(RuntimeError):
     pass
-
-
-class TfBus:
-    """The SPI bus handshake with the TF4060's flash master (tf4060v2 #123).
-
-    SCK/MOSI/MISO are shared with the FPGA, which reads the SPI ROM for the
-    Amiga. The FPGA takes the bus only while our select (GPIO7) is idle and
-    holds CE0 (GPIO8) low while it has it. With the a314 spi-a314 overlay that
-    moves the kernel's chip select off GPIO7 (a314d drives GPIO7 itself), each
-    transfer here does what a314d does: wait for CE0 high, assert GPIO7, check
-    CE0 again ~2 us later (the Amiga may have got the bus in that instant) and
-    back off if it is low. SCLK/MOSI are in ALT0 only for the transfer: the Pi's
-    SPI block drives them whenever they are.
-    """
-    GPFSEL0, GPFSEL1, GPSET0, GPCLR0, GPLEV0 = 0x00, 0x04, 0x1C, 0x28, 0x34
-    SEL, CE0 = 7, 8
-    WAIT_S = 5.0                 # the Amiga holds CE0 longer only if it hung
-
-    def __init__(self, mem):
-        self.m = mem
-        self._wr(self.GPSET0, 1 << self.SEL)                     # idle, then output
-        self._wr(self.GPFSEL0, (self._rd(self.GPFSEL0) & ~(7 << 21)) | (1 << 21))
-        self.pins(False)
-
-    def _rd(self, off):
-        return struct.unpack_from("<I", self.m, off)[0]
-
-    def _wr(self, off, v):
-        struct.pack_into("<I", self.m, off, v & 0xFFFFFFFF)
-
-    def pins(self, spi):
-        """GPIO10 (MOSI) and GPIO11 (SCLK): ALT0 (4) for a transfer, else inputs"""
-        v = self._rd(self.GPFSEL1) & ~0x3F
-        if spi:
-            v |= (4 << 0) | (4 << 3)
-        self._wr(self.GPFSEL1, v)
-
-    def ce0_low(self):
-        return not (self._rd(self.GPLEV0) >> self.CE0) & 1
-
-    def acquire(self):
-        t0 = time.monotonic()
-        back = 1e-5
-        while True:
-            if not self.ce0_low():
-                self._wr(self.GPCLR0, 1 << self.SEL)
-                t = time.perf_counter()
-                while time.perf_counter() - t < 2e-6:
-                    pass
-                if not self.ce0_low():
-                    self.pins(True)
-                    return
-                self._wr(self.GPSET0, 1 << self.SEL)             # the Amiga got it first
-            if time.monotonic() - t0 > self.WAIT_S:
-                raise SpiError(f"the TF4060 has held the SPI bus (CE0) for {self.WAIT_S:.0f} s")
-            time.sleep(back)
-            back = min(back * 2, 1e-3)
-
-    def release(self):
-        self.pins(False)
-        self._wr(self.GPSET0, 1 << self.SEL)
-
-
-def spidev_cs_pin(dt="/proc/device-tree"):
-    """The GPIO of spidev0.0's kernel chip select, from the device tree, or None"""
-    try:
-        node = open(f"{dt}/aliases/spi0", "rb").read().rstrip(b"\0").decode()
-        cells = open(f"{dt}{node}/cs-gpios", "rb").read()
-    except OSError:
-        return None
-    pins = struct.unpack(f">{len(cells) // 4}I", cells[:len(cells) // 4 * 4])
-    return pins[1] if len(pins) >= 2 else None
-
-
-def open_bus(dt="/proc/device-tree", gpiomem="/dev/gpiomem"):
-    """TfBus when the kernel's chip select is not GPIO7 (the a314d SPI handshake
-    overlay), None when the kernel still drives GPIO7 (older overlay)."""
-    cs = spidev_cs_pin(dt)
-    if cs is None or cs == TfBus.SEL:
-        return None
-    try:
-        if b"bcm2712" in open(f"{dt}/compatible", "rb").read():
-            raise SpiError("Pi 5: no /dev/gpiomem GPIO7 handshake")
-        fd = os.open(gpiomem, os.O_RDWR | os.O_SYNC)
-        try:
-            mem = mmap.mmap(fd, 4096, mmap.MAP_SHARED, mmap.PROT_READ | mmap.PROT_WRITE)
-        finally:
-            os.close(fd)
-    except OSError as e:
-        raise SpiError(f"GPIO7 handshake: cannot map {gpiomem}: {e}") from e
-    return TfBus(mem)
 
 
 def open_device(cfg=None):
@@ -135,32 +42,23 @@ def find_magic(resp, magic, search=P.MAGIC_SEARCH):
 
 
 class Spi:
-    def __init__(self, dev, bus=None):
+    def __init__(self, dev):
         self.dev = dev
-        self.bus = bus           # TfBus: we drive GPIO7 (see open_bus)
 
     def close(self):
         try:
             self.dev.close()
         except Exception:
             pass
-        if self.bus:
-            self.bus.release()
 
     slow = False                 # set by the timing run around clock switches: SPI at SPI_SLOW_HZ
 
     def xfer(self, data, speed_hz=None):
         if self.slow:
             speed_hz = min(speed_hz or P.SPI_SLOW_HZ, P.SPI_SLOW_HZ)
-        if self.bus:
-            self.bus.acquire()
-        try:
-            if speed_hz:
-                return bytes(self.dev.xfer2(list(data), int(speed_hz)))
-            return bytes(self.dev.xfer2(list(data)))
-        finally:
-            if self.bus:
-                self.bus.release()
+        if speed_hz:
+            return bytes(self.dev.xfer2(list(data), int(speed_hz)))
+        return bytes(self.dev.xfer2(list(data)))
 
     # ---- shared SRAM ---------------------------------------------------------
     def sram_read(self, addr, n):

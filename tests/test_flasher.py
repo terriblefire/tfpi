@@ -20,7 +20,7 @@ class FlasherTests(Sandbox):
         self.assertIsNotNone(state["fpga"]["sha"])
         self.assertEqual(state["cpld"]["device"], "XC95288XL-10-TQ144")
         self.assertEqual(self.cpld_flashes(), 1)
-        self.assertEqual(open(os.environ["FAKE_A314"]).read(), "active")  # a314d running again after
+        self.assertFalse((self.tmp / "a314.log").exists())               # a314d left alone
         self.assertTrue((config.FIRMWARE_DIR / "r1.zip").exists())
 
         self.assertEqual(self.flash(z), 0)
@@ -128,17 +128,3 @@ class FlasherTests(Sandbox):
         os.environ["FAKE_XC3_FAIL"] = "1"
         self.assertEqual(self.flash(self.release()), 1)
         self.assertEqual(self.calls()[-3:], ["xc3sprog", "fomu-flash -r", "setgpio"])
-
-    def test_a314d_stopped_for_the_flash_and_started_after(self):
-        open(os.environ["FAKE_A314"], "w").write("active")
-        self.assertEqual(self.flash(self.release()), 0)
-        log = self.systemctl_log().splitlines()
-        self.assertEqual([l for l in log if not l.startswith("is-active")], ["stop a314d", "start a314d"])
-        self.assertEqual(open(os.environ["FAKE_A314"]).read(), "active")
-
-    def test_a314d_started_again_after_a_failed_flash(self):
-        open(os.environ["FAKE_A314"], "w").write("active")
-        os.environ["FAKE_FOMU_CORRUPT"] = "1"
-        self.assertEqual(self.flash(self.release()), 1)
-        self.assertEqual(open(os.environ["FAKE_A314"]).read(), "active")
-        self.assertTrue(self.systemctl_log().rstrip().endswith("start a314d"))
