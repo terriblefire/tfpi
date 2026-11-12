@@ -200,6 +200,7 @@ def flash_fpga(release, state, work):
         raise FlashError(f"SPI flash verify failed: {mismatches} bytes differ")
     fpga["sha"] = release.fpga_sha
     fpga["last_result"] = "ok"
+    fpga["a314"] = release.a314_commit or None      # for the compatibility banner (compat.py)
     config.save_state(state)
     log("FPGA: verify OK")
 

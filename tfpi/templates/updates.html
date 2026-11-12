@@ -8,7 +8,7 @@
 {% if update and update.error %}<p class="warn">The last check failed: {{ update.error }}</p>{% endif %}
 {% if update and update.available %}
 <div class="update">
-<p><b>Update available</b> <span class="mono muted">{{ update.installed[:7] or "?" }} → {{ update.latest[:7] }}</span></p>
+<p><b>Update available</b>{% if update.latest_version %} · TF Pi {{ tfpi_version }} → {{ update.latest_version }}{% endif %} <span class="mono muted">{{ update.installed[:7] or "?" }} → {{ update.latest[:7] }}</span></p>
 {% if update.changes %}<ul class="changes">{% for c in update.changes %}<li>{{ c }}</li>{% endfor %}</ul>{% endif %}
 <p class="muted">Rebuilds: {{ update.rebuild | join(", ") if update.rebuild else "nothing; only the tfpi page and tools" }}.</p>
 {% if update.a314d_interrupted %}
@@ -25,6 +25,7 @@
 
 <div class="card"><h2>Installed versions</h2>
 <p class="muted">The installer, this web page and the tools it uses (fomu-flash, xc3sprog, a314d).</p><table>
+<tr><th>TF Pi version</th><td class="mono">{{ tfpi_version }}</td></tr>
 {% for name, v in versions.items() %}<tr><th>{{ name }}</th><td class="mono">{{ v.ref[:12] if v.ref else "" }} <span class="muted">{{ v.repo }}</span></td></tr>
 {% else %}<tr><td class="muted">no version info (installer not run?)</td></tr>{% endfor %}
 </table></div>
