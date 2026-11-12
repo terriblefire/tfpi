@@ -112,6 +112,16 @@ def remote_pins(commit):
     return pins
 
 
+def remote_version(commit):
+    """tfpi's __version__ at `commit` (best effort: None before tfpi was versioned or offline)."""
+    try:
+        text = _get(f"https://raw.githubusercontent.com/{_github_path()}/{commit}/tfpi/__init__.py").decode()
+    except Exception:
+        return None
+    match = re.search(r'^__version__\s*=\s*"([^"]+)"', text, re.M)
+    return match.group(1) if match else None
+
+
 def remote_changes(old, new):
     """Commit subjects between two tfpi commits (best effort: GitHub API)."""
     try:
@@ -160,6 +170,8 @@ def check():
     try:
         head = remote_head()
         result.update(compare(installed, head, resolve_pins(remote_pins(head))))
+        if result["available"]:
+            result["latest_version"] = remote_version(head)
         if result["available"] and result["installed"]:
             result["changes"] = remote_changes(result["installed"], head)
     except (UpdateError, OSError, ValueError) as error:

@@ -69,6 +69,7 @@ fieldset { border:1px solid var(--line); border-radius:6px; margin:0 0 12px; } l
 {% if session.user %}<form class="inline" method="post" action="/logout"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary">Log out</button></form>{% endif %}
 </header>
 <main>
+{% if compat %}<div class="banner-bad"><b>Incompatible versions.</b> {{ compat }}</div>{% endif %}
 {% for category, message in get_flashed_messages(with_categories=true) %}<div class="flash {{ category }}">{{ message }}</div>{% endfor %}
 {% block body %}{% endblock %}
 </main>

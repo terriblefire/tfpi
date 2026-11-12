@@ -21,8 +21,8 @@ from flask import (Flask, abort, flash, jsonify, redirect, render_template, requ
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 
-from . import config
-from . import custom, diag, feed, files, sdk, update
+from . import __version__, config
+from . import compat, custom, diag, feed, files, sdk, update
 from .flasher import plan
 from .fwimage import FirmwareError, load_release
 
@@ -152,7 +152,13 @@ def create_app():
 
     @app.context_processor
     def inject():
-        return {"csrf": session.get("csrf", ""), "board": config.board()}
+        extra = {"csrf": session.get("csrf", ""), "board": config.board(), "tfpi_version": __version__}
+        if session.get("user"):
+            try:
+                extra["compat"] = compat.banner()
+            except Exception:           # never let the check take a page down
+                extra["compat"] = None
+        return extra
 
     @app.errorhandler(413)
     def too_large(_error):

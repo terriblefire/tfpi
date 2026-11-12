@@ -217,15 +217,17 @@ install -m644 "$self_dir/systemd/a314d.service.d/tfpi-restart.conf" /etc/systemd
 
 # ref: what is installed. a314d_sha256: the a314d this installer built (the
 # page uses it to warn when a locally built a314d would be replaced).
+# version: tfpi's __version__ (tfpi/__init__.py).
 # If a skipped part's checkout can't be read, keep the ref recorded last time.
 ver() {
 	local ref
 	ref=$(git -C "$SRC/$1" rev-parse HEAD 2>/dev/null) || ref=$(prev "$1" ref)
 	printf '"%s": {"repo": "%s", "ref": "%s"%s}' "$1" "$2" "$ref" "${3:-}"
 }
+tfpi_version=$(sed -n 's/^__version__ *= *"\([^"]*\)".*/\1/p' "$self_dir/tfpi/__init__.py")
 {
 	echo "{"
-	ver tfpi "$TFPI_REPO"; echo ","
+	ver tfpi "$TFPI_REPO" ", \"version\": \"$tfpi_version\""; echo ","
 	ver fomu-flash "$FOMU_FLASH_REPO"; echo ","
 	ver xc3sprog "$XC3SPROG_REPO"; echo ","
 	ver a314 "$A314_REPO" ", \"a314d_sha256\": \"$a314d_sha\""; echo

@@ -102,6 +102,7 @@ class Release:
     cpld_file: str = None
     cpld_jed: bytes = None
     cpld_device: str = None
+    a314_commit: str = ""        # the a314 the SPI ROM was built from (README.md)
     members: list = field(default_factory=list)
 
     @property
@@ -124,6 +125,7 @@ class Release:
             "cpld_file": self.cpld_file,
             "cpld_sha": self.cpld_sha,
             "cpld_device": self.cpld_device,
+            "a314_commit": self.a314_commit,
             "members": self.members,
         }
 
@@ -184,9 +186,13 @@ def load_release(path, name=None, board=None, spirom=None):
                       members=sorted(files))
     release.fpga_file = ram_name
     release.seed = files.get("seed.txt", b"").decode("ascii", "replace").strip()
-    if not release.seed and "README.md" in files:
-        found = re.search(r"seed\s+(\d+)", files["README.md"].decode("utf-8", "replace"), re.I)
+    readme = files.get("README.md", b"").decode("utf-8", "replace")
+    if not release.seed and readme:
+        found = re.search(r"seed\s+(\d+)", readme, re.I)
         release.seed = found.group(1) if found else ""
+    # "a314 (a314.device, ...) built in ... from https://github.com/erique/a314 tf4060 at <commit>"
+    found = re.search(r"^.*\ba314\b.*\bat ([0-9a-f]{7,40})\b", readme, re.M)
+    release.a314_commit = found.group(1) if found else ""
 
     ram = files[ram_name]
     if not ram.startswith(PREAMBLE):
