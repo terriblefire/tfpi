@@ -30,7 +30,8 @@ UPDATE_CMD = os.environ.get("TFPI_UPDATE_CMD", "/usr/local/bin/tfpi-update")
 SYSTEMD_RUN = os.environ.get("TFPI_SYSTEMD_RUN", "systemd-run")
 A314D = Path(os.environ.get("TFPI_A314D", "/opt/a314/a314d"))
 BOOT_FILES = [Path(p) for p in os.environ.get(
-    "TFPI_BOOT_FILES", "/boot/firmware/config.txt:/boot/firmware/cmdline.txt").split(":")]
+    "TFPI_BOOT_FILES", "/boot/firmware/config.txt:/boot/firmware/cmdline.txt:"
+    "/boot/firmware/overlays/spi-a314.dtbo").split(":")]   # a314's SPI overlay (GPIO7 handshake, #123)
 CHECK_EVERY = 12 * 3600
 TIMEOUT = 20
 
@@ -208,7 +209,7 @@ def run(log, result):
         reboot = boot_before != [sha256(p) for p in BOOT_FILES]
         os.sync()
         if rc == 0:
-            summary = "updated" + ("; config.txt/cmdline.txt changed, reboot the Pi (and the Amiga) to use it"
+            summary = "updated" + ("; boot files (config.txt, cmdline.txt or the a314 SPI overlay) changed, reboot the Pi (and the Amiga) to use them"
                                    if reboot else "")
         else:
             summary = f"tfpi-update exited with status {rc}; the log above says where it stopped"
