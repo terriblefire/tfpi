@@ -136,3 +136,38 @@ class UpdateWebTests(UpdateBase):
         page = self.client.post("/update/check", data={"csrf": self.csrf("/")},
                                 follow_redirects=True).get_data(as_text=True)
         self.assertIn("a314d keeps running", page)
+
+
+class FollowBranchTests(UpdateBase):
+    """A314_REF=tf4060: the branch's head decides, not the word in sources.conf (tf4060v2 #123)."""
+    def setUp(self):
+        super().setUp()
+        saved = update.ls_remote
+        self.addCleanup(setattr, update, "ls_remote", saved)
+        self.branch_at = "c" * 40
+        update.ls_remote = lambda repo, branch: self.branch_at
+        pins = dict(PINS, A314_REPO="https://github.com/erique/a314", A314_REF="tf4060")
+        update.remote_pins = lambda commit: dict(pins)
+
+    def test_branch_at_the_installed_commit_needs_no_rebuild(self):
+        self.installed(a314="c" * 40)
+        result = update.check()
+        self.assertEqual(result["rebuild"], [])
+        self.assertFalse(result["a314d_interrupted"])
+
+    def test_branch_moved_rebuilds_a314(self):
+        self.installed(a314="d" * 40)
+        result = update.check()
+        self.assertEqual(result["rebuild"], ["a314"])
+        self.assertTrue(result["a314d_interrupted"])
+
+    def test_branch_moved_is_offered_even_when_tfpi_has_not(self):
+        update.remote_head = lambda: OLD                  # tfpi itself unchanged
+        self.installed(a314="d" * 40)
+        self.assertTrue(update.check()["available"])
+        self.installed(a314="c" * 40)
+        self.assertFalse(update.check()["available"])
+
+    def test_commit_refs_are_left_alone(self):
+        pins = {"A314_REPO": "r", "A314_REF": "e" * 40, "FOMU_FLASH_REF": "f1"}
+        self.assertEqual(update.resolve_pins(pins), pins)
