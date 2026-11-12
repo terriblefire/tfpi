@@ -85,10 +85,20 @@ prev() {   # prev NAME FIELD: a value recorded by the last install
 	python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get(sys.argv[2],{}).get(sys.argv[3],""))' \
 		"$PREFIX/versions.json" "$1" "$2" 2>/dev/null || true
 }
+resolve() { # resolve REPO REF: the commit a branch REF is at now, else REF itself (a commit)
+	local commit
+	commit=$(git ls-remote "$1" "refs/heads/$2" 2>/dev/null | cut -f1)
+	echo "${commit:-$2}"
+}
 needed() { # needed NAME REF BINARY: true if NAME must be (re)built
 	[ -n "${TFPI_REBUILD:-}" ] || [ ! -x "$3" ] || [ "$(prev "$1" ref)" != "$2" ] || return 1
 }
 
+# checkout DIR REF: a commit, or a branch (its fetched origin/ head)
+checkout() {
+	git -C "$1" checkout --quiet --force --detach "$2" 2>/dev/null \
+		|| git -C "$1" checkout --quiet --force --detach "origin/$2"
+}
 # fetch NAME REPO REF [OWNER]: clone/update $SRC/NAME and check out REF
 fetch() {
 	local dir=$SRC/$1
@@ -96,10 +106,10 @@ fetch() {
 	# is thrown away and cloned again.
 	if ! { [ -d "$dir/.git" ] && git -C "$dir" remote set-url origin "$2" \
 			&& git -C "$dir" fetch --quiet --tags origin \
-			&& git -C "$dir" checkout --quiet --force --detach "$3"; }; then
+			&& checkout "$dir" "$3"; }; then
 		rm -rf "$dir"
 		git clone --quiet "$2" "$dir"
-		git -C "$dir" checkout --quiet --force --detach "$3"
+		checkout "$dir" "$3"
 	fi
 	git -C "$dir" clean -fdxq
 	[ -z "${4:-}" ] || chown -R "$4": "$dir"
@@ -176,8 +186,10 @@ vlink -v 2>&1 | head -1 || true
 # This is the only step that interrupts a314d.
 a314_built=0
 a314d_sha=$(prev a314 a314d_sha256)
-if needed a314 "$A314_REF" /opt/a314/a314d; then
-	fetch a314 "$A314_REPO" "$A314_REF" "$A314_USER"
+# A314_REF is a branch (tf4060): rebuild when its head has moved since the last install
+A314_COMMIT=$(resolve "$A314_REPO" "$A314_REF")
+if needed a314 "$A314_COMMIT" /opt/a314/a314d; then
+	fetch a314 "$A314_REPO" "$A314_COMMIT" "$A314_USER"
 	echo "a314: stopping a314d to rebuild it"
 	systemctl stop a314d 2>/dev/null || true
 	(cd "$SRC/a314/Software" && SUDO_USER=$A314_USER bash ./install-pi.sh tf)
