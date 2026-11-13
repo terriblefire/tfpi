@@ -78,7 +78,7 @@ To check what's published from a Pi: `python3 -m tfpi.feed`
 | `<board>_ram_flash.bin` or `<board>_ram.bin` | yes | Full SPI flash image, or a raw iCE40 bitstream |
 | `*.jed` | no | BUS CPLD. With several, `_bus_prod`, then `_bus_top`, then `_bus` is used |
 | `seed.txt` | no | Shown on the page (else "seed N" from `README.md`) |
-| `spirom.img` | raw bitstreams only | SSBL/ROMFS combined at 0x21000; can also be placed at `/etc/tfpi/spirom.img` |
+| `spirom.img` | no | SSBL/ROMFS combined with a raw bitstream at 0x21000; can also be placed at `/etc/tfpi/spirom.img`. Without one, the raw bitstream is flashed as it is, after a warning |
 
 Files may be inside a folder in the zip. Zips for another board (the prefix before `_ram`) are refused. The board is
 set in `/etc/tfpi/tfpi.conf` (`BOARD=tf4060r5`).

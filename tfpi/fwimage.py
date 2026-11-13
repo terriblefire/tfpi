@@ -3,7 +3,8 @@
 A release zip holds:
   <board>_ram_flash.bin RAM FPGA image (or <board>_ram.bin): either the full
                         SPI flash image (bitstream + SSBL/ROMFS at 0x21000) or
-                        a raw bitstream
+                        a raw bitstream (flashed as it is, with a warning, when
+                        there is no spirom.img)
   *.jed                 BUS CPLD. One .jed is used whatever its name; with
                         several, _bus_prod, then _bus_top, then _bus wins
   seed.txt              optional, nextpnr seed (else "seed N" in README.md)
@@ -104,6 +105,7 @@ class Release:
     cpld_device: str = None
     a314_commit: str = ""        # the a314 the SPI ROM was built from (README.md)
     members: list = field(default_factory=list)
+    warnings: list = field(default_factory=list)   # shown before flashing
 
     @property
     def fpga_sha(self):
@@ -127,6 +129,7 @@ class Release:
             "cpld_device": self.cpld_device,
             "a314_commit": self.a314_commit,
             "members": self.members,
+            "warnings": self.warnings,
         }
 
 
@@ -206,12 +209,15 @@ def load_release(path, name=None, board=None, spirom=None):
     else:
         payload = files.get("spirom.img", spirom)
         if payload is None:
-            raise FirmwareError(
-                f"{ram_name} is a raw bitstream and needs spirom.img (put it in the zip "
-                "or in /etc/tfpi/spirom.img)")
-        release.fpga_image = combine(ram, payload)
-        release.fpga_source = "raw bitstream + spirom.img" + (
-            " (from zip)" if "spirom.img" in files else " (from /etc/tfpi)")
+            release.fpga_image = ram
+            release.fpga_source = "raw bitstream"
+            release.warnings.append(
+                f"{ram_name} is a raw bitstream and there is no spirom.img (in the zip or in "
+                "/etc/tfpi/spirom.img): only the bitstream is flashed, with no SSBL/ROMFS.")
+        else:
+            release.fpga_image = combine(ram, payload)
+            release.fpga_source = "raw bitstream + spirom.img" + (
+                " (from zip)" if "spirom.img" in files else " (from /etc/tfpi)")
 
     jed_name = _pick_jed(files)
     if jed_name is not None:

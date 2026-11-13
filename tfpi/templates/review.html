@@ -9,6 +9,7 @@
 <tr><th>BUS CPLD</th><td>{% if release.cpld_sha %}<span class="mono">{{ release.cpld_file }}</span><br><span class="mono">{{ release.cpld_sha[:16] }}</span> · {{ release.cpld_device or "unknown device" }}<br>{% endif %}
   {% if plan.cpld %}<b>will be flashed</b>{% else %}<span class="muted">skipped</span>{% endif %} <span class="muted">({{ plan.cpld_reason }})</span></td></tr>
 </table>
+{% for w in release.warnings %}<p class="warn">{{ w }}</p>{% endfor %}
 {% if not release.cpld_sha %}<p class="warn">This zip has no CPLD (.jed) file, so only the FPGA can be flashed.</p>{% endif %}
 {% if plan.blocked %}<p class="bad">{{ plan.blocked }}</p>{% endif %}
 </div>

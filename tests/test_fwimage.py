@@ -19,11 +19,20 @@ class ReleaseTests(Sandbox):
         self.assertEqual(release.cpld_jed, jed())          # _bus_top preferred over _bus
         self.assertEqual(release.cpld_device, "XC95288XL-10-TQ144")
 
-    def test_raw_bitstream_needs_spirom(self):
+    def test_raw_bitstream_without_spirom_is_flashed_with_a_warning(self):
+        # Layout of tf4060r5_2025_02_10_1c48879_27399_RC1_1.zip
+        z = make_zip(self.tmp / "r.zip", {"tf4060r5_ram.bin": bitstream(), "tf4060r5_bus.jed": jed()})
+        release = load_release(z, board="tf4060r5")
+        self.assertEqual(release.fpga_image, bitstream())
+        self.assertEqual(release.fpga_source, "raw bitstream")
+        self.assertEqual(len(release.warnings), 1)
+        self.assertIn("spirom.img", release.warnings[0])
+
+    def test_raw_bitstream_with_etc_spirom(self):
         z = make_zip(self.tmp / "r.zip", {"tf4060r5_ram.bin": bitstream(), "tf4060r5_bus_top.jed": jed()})
-        with self.assertRaisesRegex(FirmwareError, "spirom.img"):
-            load_release(z)
         release = load_release(z, spirom=spi_image())
+        self.assertEqual(release.warnings, [])
+        self.assertIn("from /etc/tfpi", release.fpga_source)
         self.assertEqual(release.fpga_image, combine(bitstream(), spi_image()))
         self.assertEqual(release.fpga_image[SPIROM_OFFSET:], spi_image())
 
