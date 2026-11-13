@@ -11,7 +11,8 @@ SPI_BUS, SPI_DEV = 0, 0
 SPI_MODE = 0
 SPI_HZ = 4_000_000          # a314.v takes up to 25 MHz; the spec says <= 12 MHz
 SPI_MAX_HZ = 12_000_000
-SPI_CHUNK = 2048            # spidev bufsiz is 4096 by default
+SPI_CHUNK = 128             # shared SRAM bytes per transfer: the Amiga's flash access waits
+                            # while the Pi has the SPI bus (tf4060v2 #123), ~0.3 ms at SPI_HZ
 
 # ---- A314 shared SRAM (SPI addresses; SRAM offset = address + 0x400) ----------
 SRAM_READ = 0x00            # 000aaaaa aaaaaaaa aaaaaaaa -> data from byte 5

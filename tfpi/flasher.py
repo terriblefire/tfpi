@@ -1,7 +1,10 @@
 """Flash a TF firmware release zip onto the board attached to this Pi.
 
 Ported from tf4060/boards/tf4060r5/flash_ram.sh and flash_bus.sh:
-  * a314d keeps running: it backs off the SPI pins by itself;
+  * a314d is stopped for the job and started again at the end (if it was
+    running): since the TF4060 SPI bus handshake (tf4060v2 #123) it switches
+    GPIO10/11 between input and ALT0 around every transfer, which would cut
+    fomu-flash's bit-banged SPI clock between flash commands;
   * FPGA: identify the SPI flash by JEDEC ID (fomu-flash -i), check the image
     fits, fomu-flash -u -w, read the image length back (-b) and compare;
   * CPLD: xc3sprog -c gpiod_creator -p 0 -v, ONE attempt only. A CPLD that
@@ -266,6 +269,11 @@ def store_release(zip_path, name, state):
             old.unlink()
 
 
+def a314d_active():
+    return subprocess.run([config.SYSTEMCTL, "is-active", "--quiet", config.A314_SERVICE],
+                          stdin=subprocess.DEVNULL).returncode == 0
+
+
 def flash(zip_path, name=None, force_fpga=False, force_cpld=False):
     name = name or Path(zip_path).name
     release = load_release(zip_path, name=name, board=config.board(), spirom=config.spirom())
@@ -287,6 +295,10 @@ def flash(zip_path, name=None, force_fpga=False, force_cpld=False):
             work = config.STATE_DIR / "work"
             work.mkdir(parents=True, exist_ok=True)
             failure = None
+            a314d_was_active = a314d_active()
+            if a314d_was_active:
+                log("a314d: stopped for the flash (it drives the shared SPI pins)")
+                run([config.SYSTEMCTL, "stop", config.A314_SERVICE])
             try:
                 if todo["fpga"]:
                     flash_fpga(release, state, work)
@@ -303,6 +315,9 @@ def flash(zip_path, name=None, force_fpga=False, force_cpld=False):
                     if failure is None and not booted:
                         failure = FlashError("CPLD programmed, but the FPGA did not configure "
                                              "afterwards (CDONE low). Power-cycle the Amiga.")
+                if a314d_was_active:
+                    log("a314d: started again")
+                    run([config.SYSTEMCTL, "start", config.A314_SERVICE])
                 entry["result"] = f"FAILED: {failure}" if failure else "ok"
                 state["history"] = ([entry] + state["history"])[:50]
                 if entry["result"] == "ok":
