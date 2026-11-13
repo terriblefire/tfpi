@@ -189,7 +189,8 @@ delete and make folders from the list.
 ## Updating the Pi software
 
 The page checks GitHub for a newer tfpi about twice a day (or on **Check for
-updates**). If there is one, the Home page says so and the **Updates** tab
+updates**). Updates go to the newest release tag (`v0.8.2`, named like the
+TF4060 firmware release it goes with). If there is one, the Home page says so and the **Updates** tab
 lists the new commits with an **Update now** button. That runs `tfpi-update` with a live log, in its own systemd unit so
 the page restarting halfway doesn't stop it.
 
