@@ -2,7 +2,7 @@ import io
 import re
 import time
 
-from helpers import Sandbox, full_image, jed, make_zip
+from helpers import Sandbox, bitstream, full_image, jed, make_zip
 from tfpi import config
 
 
@@ -44,6 +44,15 @@ class WebTests(Sandbox):
         review = self.upload({"tf4060r4_ram.bin": full_image()})
         page = self.client.get(review.headers["Location"], follow_redirects=True).get_data(as_text=True)
         self.assertIn("rejected", page)
+
+    def test_raw_bitstream_without_spirom_warns_on_review(self):
+        self.login()
+        review_url = self.upload({"tf4060r5_ram.bin": bitstream(), "tf4060r5_bus.jed": jed()}).headers["Location"]
+        page = self.client.get(review_url).get_data(as_text=True)
+        self.assertNotIn("rejected", page)
+        self.assertIn("there is no spirom.img", page)
+        self.assertIn("will be flashed", page)
+        self.assertIn("Flash now", page)
 
     def test_upload_review_flash(self):
         self.login()

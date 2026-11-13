@@ -278,6 +278,8 @@ def flash(zip_path, name=None, force_fpga=False, force_cpld=False):
     name = name or Path(zip_path).name
     release = load_release(zip_path, name=name, board=config.board(), spirom=config.spirom())
     log(f"release {name}: board {release.board}, seed {release.seed or '-'}")
+    for warning in release.warnings:
+        log("WARNING: " + warning)
     with flash_lock():
         state = config.load_state()
         todo = plan(release, state, force_fpga, force_cpld)
