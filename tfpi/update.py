@@ -1,9 +1,10 @@
 """Software updates for this Pi: is there a newer tfpi, what would it change,
 and run `tfpi-update` as a job the web page can follow.
 
-The check reads the tfpi repo's main branch with `git ls-remote` (no API
-limits) and that commit's sources.conf, and compares the pins with what the
-last install recorded in versions.json. The installer only rebuilds parts
+Updates go to the newest release tag (vX.Y or vX.Y.Z, named like the TF4060
+firmware releases). The check reads the tags with `git ls-remote` (no API limits)
+and that commit's sources.conf, and compares the pins with what the last
+install recorded in versions.json. The installer only rebuilds parts
 whose pin changed, so a314d is interrupted only if the a314 pin moves.
 
 Run: python3 -m tfpi.update check | run --log FILE --result FILE
@@ -25,7 +26,6 @@ from pathlib import Path
 from . import config
 
 REPO = os.environ.get("TFPI_UPDATE_REPO", "https://github.com/terriblefire/tfpi")
-BRANCH = "main"
 UPDATE_CMD = os.environ.get("TFPI_UPDATE_CMD", "/usr/local/bin/tfpi-update")
 SYSTEMD_RUN = os.environ.get("TFPI_SYSTEMD_RUN", "systemd-run")
 A314D = Path(os.environ.get("TFPI_A314D", "/opt/a314/a314d"))
@@ -71,6 +71,42 @@ def resolve_pins(pins):
     return out
 
 
+RELEASE_TAG = re.compile(r"v(\d+)\.(\d+)(?:\.(\d+))?")
+
+
+def latest_tag():
+    """(tag, commit) of the newest release tag."""
+    try:
+        out = subprocess.run(["git", "ls-remote", "--tags", REPO, "refs/tags/v*"], capture_output=True,
+                             text=True, timeout=TIMEOUT)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise UpdateError(f"can't reach {REPO}: {error}") from error
+    if out.returncode:
+        raise UpdateError(f"can't reach {REPO}: {(out.stderr or 'no answer').strip()[-200:]}")
+    return newest_release(out.stdout)
+
+
+def newest_release(ls_remote_tags):
+    """(tag, commit) of the newest release tag in `git ls-remote --tags` output."""
+    tags = {}
+    for line in ls_remote_tags.splitlines():
+        commit, ref = line.split()
+        name = ref[len("refs/tags/"):]
+        peeled = name.endswith("^{}")       # an annotated tag: this line is its commit
+        name = name[:-len("^{}")] if peeled else name
+        if RELEASE_TAG.fullmatch(name) and (peeled or name not in tags):
+            tags[name] = commit
+    if not tags:
+        raise UpdateError(f"no release tags in {REPO}")
+    name = max(tags, key=lambda t: tuple(int(n or 0) for n in RELEASE_TAG.fullmatch(t).groups()))
+    return name, tags[name]
+
+
+def target():
+    """(ref, commit) an update goes to: the newest release tag."""
+    return latest_tag()
+
+
 def check_file():
     return config.STATE_DIR / "update_check.json"
 
@@ -82,17 +118,6 @@ def lock_file():
 def _github_path():
     match = re.match(r"https://github\.com/([^/]+/[^/.]+)", REPO)
     return match.group(1) if match else None
-
-
-def remote_head():
-    try:
-        out = subprocess.run(["git", "ls-remote", REPO, f"refs/heads/{BRANCH}"], capture_output=True,
-                             text=True, timeout=TIMEOUT)
-    except (OSError, subprocess.TimeoutExpired) as error:
-        raise UpdateError(f"can't reach {REPO}: {error}") from error
-    if out.returncode or not out.stdout.strip():
-        raise UpdateError(f"can't reach {REPO}: {(out.stderr or 'no answer').strip()[-200:]}")
-    return out.stdout.split()[0]
 
 
 def _get(url):
@@ -168,7 +193,7 @@ def check():
     installed = config.read_json(config.VERSIONS_FILE, {})
     result = {"time": time.time(), "error": None}
     try:
-        head = remote_head()
+        _, head = target()
         result.update(compare(installed, head, resolve_pins(remote_pins(head))))
         if result["available"]:
             result["latest_version"] = remote_version(head)

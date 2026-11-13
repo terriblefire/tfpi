@@ -5,10 +5,11 @@
 #   curl -fsSL https://terriblefire.github.io/tfpi/install.sh | sudo bash
 #
 # Environment overrides: TFPI_REPO, TFPI_REF, TFPI_USER, TFPI_NO_REBOOT=1
+# Without TFPI_REF it installs the newest release tag (vX.Y or vX.Y.Z).
 set -euo pipefail
 
 TFPI_REPO=${TFPI_REPO:-https://github.com/terriblefire/tfpi}
-TFPI_REF=${TFPI_REF:-main}
+TFPI_REF=${TFPI_REF:-}
 PREFIX=/opt/tfpi
 SRC=$PREFIX/src
 LOG=/var/log/tfpi-install.log
@@ -37,14 +38,18 @@ fi
 if [ "${TFPI_STAGE:-1}" = 1 ] || [ ! -f "$self_dir/sources.conf" ]; then
 	command -v git >/dev/null || { apt-get update; apt-get install -y git ca-certificates; }
 	if [ -d "$SRC/tfpi/.git" ]; then
-		git -C "$SRC/tfpi" fetch --quiet origin
+		git -C "$SRC/tfpi" fetch --quiet --tags --force origin
 	else
 		rm -rf "$SRC/tfpi"
 		git clone --quiet "$TFPI_REPO" "$SRC/tfpi"
 	fi
+	if [ -z "$TFPI_REF" ]; then
+		TFPI_REF=$(git -C "$SRC/tfpi" tag -l 'v[0-9]*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+(\.[0-9]+)?$' | head -1)
+		TFPI_REF=${TFPI_REF:-main}
+	fi
 	git -C "$SRC/tfpi" checkout --quiet --force --detach "origin/$TFPI_REF" 2>/dev/null \
 		|| git -C "$SRC/tfpi" checkout --quiet --force --detach "$TFPI_REF"
-	echo "tfpi at $(git -C "$SRC/tfpi" rev-parse --short HEAD)"
+	echo "tfpi $TFPI_REF at $(git -C "$SRC/tfpi" rev-parse --short HEAD)"
 	TFPI_STAGE=2 exec bash "$SRC/tfpi/install.sh" "$@"
 fi
 
