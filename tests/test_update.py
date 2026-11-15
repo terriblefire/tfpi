@@ -20,10 +20,10 @@ class UpdateBase(Sandbox):
         self.boot = self.tmp / "config.txt"
         self.boot.write_text("dtparam=spi=on\n")
         self.saved = {k: getattr(update, k) for k in ("A314D", "BOOT_FILES", "UPDATE_CMD", "SYSTEMD_RUN",
-                                                      "remote_head", "remote_pins", "remote_changes")}
+                                                      "latest_tag", "remote_pins", "remote_changes")}
         update.A314D, update.BOOT_FILES = self.a314d, [self.boot]
         update.SYSTEMD_RUN = str(self.tmp / "no-systemd-run")
-        update.remote_head = lambda: NEW
+        update.latest_tag = lambda: ("v0.8.2", NEW)
         update.remote_pins = lambda commit: dict(PINS)
         update.remote_changes = lambda old, new: ["Files tab"]
         self.installed(a314="a1")
@@ -58,12 +58,12 @@ class UpdateTests(UpdateBase):
         self.assertTrue(update.check()["a314d_local"])
 
     def test_up_to_date_and_errors(self):
-        update.remote_head = lambda: OLD
+        update.latest_tag = lambda: ("v0.8.2", OLD)
         self.assertFalse(update.check()["available"])
 
         def offline():
             raise update.UpdateError("can't reach github")
-        update.remote_head = offline
+        update.latest_tag = offline
         self.assertIn("can't reach", update.check()["error"])
 
     def test_run_records_result_and_reboot(self):
@@ -162,7 +162,7 @@ class FollowBranchTests(UpdateBase):
         self.assertTrue(result["a314d_interrupted"])
 
     def test_branch_moved_is_offered_even_when_tfpi_has_not(self):
-        update.remote_head = lambda: OLD                  # tfpi itself unchanged
+        update.latest_tag = lambda: ("v0.8.2", OLD)                  # tfpi itself unchanged
         self.installed(a314="d" * 40)
         self.assertTrue(update.check()["available"])
         self.installed(a314="c" * 40)
@@ -171,3 +171,36 @@ class FollowBranchTests(UpdateBase):
     def test_commit_refs_are_left_alone(self):
         pins = {"A314_REPO": "r", "A314_REF": "e" * 40, "FOMU_FLASH_REF": "f1"}
         self.assertEqual(update.resolve_pins(pins), pins)
+
+
+class ReleaseTagTests(UpdateBase):
+    LS = "\n".join([
+        "1" * 40 + "\trefs/tags/deps",
+        "2" * 40 + "\trefs/tags/deps-1",
+        "3" * 40 + "\trefs/tags/v0.8.1",
+        "4" * 40 + "\trefs/tags/v0.8.2",          # annotated: the tag object ...
+        "5" * 40 + "\trefs/tags/v0.8.2^{}",       # ... and the commit it points at
+        "6" * 40 + "\trefs/tags/v0.8.10-rc1",
+        "7" * 40 + "\trefs/tags/v0.8.10",
+        "8" * 40 + "\trefs/tags/v0.9",
+    ])
+
+    def test_newest_release_tag(self):
+        self.assertEqual(update.newest_release(self.LS), ("v0.9", "8" * 40))
+
+    def test_versions_compare_as_numbers_and_annotated_tags_give_their_commit(self):
+        ls = "\n".join(l for l in self.LS.splitlines() if "v0.9" not in l)
+        self.assertEqual(update.newest_release(ls), ("v0.8.10", "7" * 40))
+        ls = "\n".join(l for l in ls.splitlines() if "v0.8.10" not in l)
+        self.assertEqual(update.newest_release(ls), ("v0.8.2", "5" * 40))
+
+    def test_no_release_tag_is_an_error(self):
+        with self.assertRaises(update.UpdateError):
+            update.newest_release("1" * 40 + "\trefs/tags/deps\n")
+
+    def test_updates_go_to_the_newest_tag(self):
+        update.latest_tag = lambda: ("v0.8.2", NEW)
+        self.assertEqual(update.target(), ("v0.8.2", NEW))
+        result = update.check()
+        self.assertTrue(result["available"])
+        self.assertEqual(result["latest"], NEW)
