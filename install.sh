@@ -72,7 +72,7 @@ apt-get update
 PKGS="git ca-certificates curl build-essential cmake pkg-config
       libusb-dev libftdi1-dev libgpiod-dev
       device-tree-compiler python3-dev python3-pip python3-virtualenv ifupdown iptables
-      python3-flask python3-waitress unzip fpga-icestorm"
+      python3-flask python3-waitress python3-websockets unzip fpga-icestorm iw"
 for optional in libftdi-dev python3-distutils; do
 	if installable "$optional"; then PKGS="$PKGS $optional"; fi
 done
@@ -211,9 +211,11 @@ for tool in tfpi-flash tfpi-update; do
 done
 [ -f /etc/tfpi/tfpi.conf ] || echo "BOARD=$BOARD" > /etc/tfpi/tfpi.conf
 install -m644 "$self_dir/systemd/tfpi-web.service" /etc/systemd/system/tfpi-web.service
+install -m644 "$self_dir/systemd/tfpi-serial.service" /etc/systemd/system/tfpi-serial.service
 # a314d comes back after it exits; the unit itself is a314's.
 install -d /etc/systemd/system/a314d.service.d
 install -m644 "$self_dir/systemd/a314d.service.d/tfpi-restart.conf" /etc/systemd/system/a314d.service.d/tfpi-restart.conf
+install -m644 "$self_dir/systemd/a314d.service.d/tfpi-serial.conf" /etc/systemd/system/a314d.service.d/tfpi-serial.conf
 
 # ref: what is installed. a314d_sha256: the a314d this installer built (the
 # page uses it to warn when a locally built a314d would be replaced).
@@ -238,6 +240,29 @@ mv "$PREFIX/versions.json.new" "$PREFIX/versions.json"
 systemctl daemon-reload
 systemctl enable tfpi-web.service
 systemctl restart tfpi-web.service
+systemctl enable tfpi-serial.service           # the Serial Port page's WebSocket
+systemctl restart tfpi-serial.service
+
+# --- WiFi power save off -----------------------------------------------------
+# With power save on, the Pi's WiFi holds back what is sent to the Pi for up
+# to a few hundred ms after a quiet spell: the pages lag, and so do the keys
+# typed on the Serial Port page. Off for good: NetworkManager's default, every
+# saved WiFi connection (one may set its own), and a udev rule for a Pi
+# without NetworkManager; then off now.
+if [ -d /etc/NetworkManager ]; then
+	install -d /etc/NetworkManager/conf.d
+	printf '[connection]\nwifi.powersave = 2\n' > /etc/NetworkManager/conf.d/tfpi-wifi-powersave.conf
+	if command -v nmcli >/dev/null && nmcli -t general status >/dev/null 2>&1; then
+		nmcli -t -f UUID,TYPE connection show | while IFS=: read -r uuid type; do
+			[ "$type" != 802-11-wireless ] || nmcli connection modify "$uuid" 802-11-wireless.powersave 2 || true
+		done || true
+	fi
+fi
+echo 'ACTION=="add", SUBSYSTEM=="net", KERNEL=="wlan*", RUN+="/sbin/iw dev %k set power_save off"' \
+	> /etc/udev/rules.d/70-tfpi-wifi-powersave.rules
+for dev in /sys/class/net/wlan*; do
+	[ -e "$dev" ] && iw dev "${dev##*/}" set power_save off 2>/dev/null || true
+done
 
 # --- Diagnostics tab: openocd (CPLD JTAG) + power-loss recovery unit ---------
 # tfdiag and the diagnostic images (tfpi/diag_images) were copied with tfpi

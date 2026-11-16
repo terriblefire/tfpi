@@ -16,13 +16,13 @@ import time
 from functools import wraps
 from pathlib import Path
 
-from flask import (Flask, abort, flash, jsonify, redirect, render_template, request,
+from flask import (Flask, Response, abort, flash, jsonify, redirect, render_template, request,
                    send_file, session, url_for)
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 
 from . import __version__, config
-from . import compat, custom, diag, feed, files, sdk, update
+from . import compat, custom, diag, feed, files, sdk, serial, serialws, update
 from .flasher import plan
 from .fwimage import FirmwareError, load_release
 
@@ -243,6 +243,24 @@ def create_app():
     @login_required
     def firmware_page():
         return page("firmware.html")
+
+    @app.get("/serial")
+    @login_required
+    def serial_page():
+        return render_template("serial.html", present=serial.directory() is not None,
+                               ws_port=serialws.PORT, ws_token=serialws.make_token(app.config["SECRET_KEY"]))
+
+    @app.get("/serial/token")
+    @login_required
+    def serial_token():
+        """A new token for the page's WebSocket (tfpi/serialws.py), to reconnect."""
+        return jsonify(token=serialws.make_token(app.config["SECRET_KEY"]))
+
+    @app.get("/serial/download")
+    @login_required
+    def serial_download():
+        return Response(serial.log_bytes(), mimetype="text/plain",
+                        headers={"Content-Disposition": "attachment; filename=amiga-serial.log"})
 
     @app.get("/updates")
     @login_required

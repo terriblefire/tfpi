@@ -1,0 +1,72 @@
+{% extends "base.html" %}{% block body %}
+<link rel="stylesheet" href="/static/xterm/xterm.css">
+<style>
+main { max-width:1200px; }     /* room for the terminal */
+#term { height:65vh; min-height:240px; background:#1e1e1e; padding:6px; border-radius:6px; }
+.termfoot { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:10px; }
+.termfoot .actions { display:flex; align-items:center; gap:14px; }
+</style>
+<div class="card"><div class="cardhead"><h1>Serial Port</h1><span id="status" class="muted">{% if present %}Connecting…{% else %}No serial port yet{% endif %}</span></div>
+<p class="muted">The TF4060's Pi serial port: from early boot on, the SSBL's boot log and debug output that goes through exec's RawPutChar (kprintf, Enforcer), and the TF4060 support Shell; what you type reaches that Shell. It needs FPGA firmware with the port, and a314d with it on this Pi. On the Amiga the port is the console device <span class="mono">TFCON:</span>: anything sent there shows up here (for example <span class="mono">list &gt;TFCON:</span>).</p>
+<p class="warn">It is not the Amiga's serial port: DiagROM and anything that uses serial.device (terminal programs, a Shell on AUX:) do not show up here.</p>
+<div id="term"></div>
+<div class="termfoot"><span class="muted">Click the terminal to type. Keys are sent directly.</span>
+<span class="actions"><a class="muted" href="/serial/download">Download log</a><button type="button" class="secondary" id="clear">Clear</button></span></div>
+</div>
+<script src="/static/xterm/xterm.min.js"></script>
+<script src="/static/xterm/xterm-addon-fit.min.js"></script>
+<script>
+(() => {
+const statusEl = document.getElementById("status");
+function setStatus(text, cls) { statusEl.textContent = text; statusEl.className = cls; }
+
+const term = new Terminal({
+  cursorBlink: true, cursorStyle: "block", fontSize: 14, fontFamily: "'Courier New', monospace",
+  theme: {background: "#1e1e1e", foreground: "#d4d4d4", cursor: "#d4d4d4", selectionBackground: "#444444"},
+  scrollback: 5000, convertEol: true,           // the Amiga mostly sends LF alone
+});
+const fit = new FitAddon.FitAddon();
+term.loadAddon(fit);
+term.open(document.getElementById("term"));
+fit.fit();
+new ResizeObserver(() => fit.fit()).observe(document.getElementById("term"));
+
+// The Amiga side, live: a WebSocket to tfpi-serial (tfpi/serialws.py). It
+// pushes output as a314d writes it and takes the keys as they are typed.
+let ws = null, token = "{{ ws_token }}", retry = null, opened = 0;
+function connect() {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  let first = true;
+  ws = new WebSocket(proto + "://" + location.hostname + ":{{ ws_port }}/serial?t=" + encodeURIComponent(token));
+  ws.onmessage = (ev) => {
+    const m = JSON.parse(ev.data);
+    if (first) {
+      // each connection starts with the end of the log: after a reconnect
+      // it replaces what is on screen rather than repeating it
+      if (opened++) term.reset();
+      first = false;
+    }
+    if (m.data) term.write(m.data);
+    if (m.error) setStatus("Not sent: " + m.error, "bad");
+    else if ("present" in m)
+      setStatus(m.present ? "Connected" : "No serial port: a314d is not running, or it has no serial port", m.present ? "ok" : "bad");
+  };
+  ws.onclose = () => {
+    setStatus("Lost contact with the Pi, reconnecting…", "bad");
+    if (!retry) retry = setTimeout(reconnect, 1000);
+  };
+}
+async function reconnect() {
+  retry = null;
+  try {
+    const r = await fetch("/serial/token", {cache: "no-store"});
+    if (r.ok) token = (await r.json()).token;
+  } catch (e) { /* the Pi is away: try again after the next close */ }
+  connect();
+}
+term.onData((data) => { if (ws && ws.readyState === WebSocket.OPEN) ws.send(data); });
+document.getElementById("clear").addEventListener("click", () => { term.clear(); term.focus(); });
+connect();
+})();
+</script>
+{% endblock %}
