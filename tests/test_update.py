@@ -171,3 +171,31 @@ class FollowBranchTests(UpdateBase):
     def test_commit_refs_are_left_alone(self):
         pins = {"A314_REPO": "r", "A314_REF": "e" * 40, "FOMU_FLASH_REF": "f1"}
         self.assertEqual(update.resolve_pins(pins), pins)
+
+
+class Xc3sprogFollowsMasterTests(UpdateBase):
+    """XC3SPROG_REF=master: rebuilt when master moves; Bookworm's commit pin still counts."""
+    def setUp(self):
+        super().setUp()
+        saved = update.ls_remote
+        self.addCleanup(setattr, update, "ls_remote", saved)
+        self.master_at = "b" * 40
+        update.ls_remote = lambda repo, branch: self.master_at if branch == "master" else "c" * 40
+        pins = dict(PINS, XC3SPROG_REPO="https://github.com/arkadiuszmakarenko/xc3sprog", XC3SPROG_REF="master",
+                    XC3SPROG_REF_GPIOD1="1" * 40)
+        update.remote_pins = lambda commit: dict(pins)
+
+    def test_master_moved_rebuilds_xc3sprog_only(self):
+        self.installed(a314="a1", xc3="9" * 40)
+        result = update.check()
+        self.assertEqual(result["rebuild"], ["xc3sprog"])
+        self.assertFalse(result["a314d_interrupted"])
+        self.assertTrue(result["available"])
+
+    def test_at_master_head_nothing_to_rebuild(self):
+        self.installed(a314="a1", xc3="b" * 40)
+        self.assertNotIn("xc3sprog", update.check()["rebuild"])
+
+    def test_bookworm_pin_still_matches(self):
+        self.installed(a314="a1", xc3="1" * 40)            # XC3SPROG_REF_GPIOD1
+        self.assertNotIn("xc3sprog", update.check()["rebuild"])
