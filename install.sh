@@ -128,6 +128,8 @@ fi
 # --- xc3sprog (gpiod_creator cable) ----------------------------------------
 gpiod_major=$(pkg-config --modversion libgpiod | cut -d. -f1)
 if [ "$gpiod_major" -ge 2 ]; then xc3_ref=$XC3SPROG_REF; else xc3_ref=$XC3SPROG_REF_GPIOD1; fi
+# a branch (master) means its head now: rebuild when it has moved since the last install
+xc3_ref=$(resolve "$XC3SPROG_REPO" "$xc3_ref")
 echo "libgpiod $(pkg-config --modversion libgpiod): xc3sprog ${xc3_ref:0:7}"
 if needed xc3sprog "$xc3_ref" /usr/local/bin/xc3sprog; then
 	rm -rf "$SRC/xc3sprog/build"
