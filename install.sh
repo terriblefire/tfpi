@@ -36,14 +36,18 @@ if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
 fi
 if [ "${TFPI_STAGE:-1}" = 1 ] || [ ! -f "$self_dir/sources.conf" ]; then
 	command -v git >/dev/null || { apt-get update; apt-get install -y git ca-certificates; }
-	if [ -d "$SRC/tfpi/.git" ]; then
-		git -C "$SRC/tfpi" fetch --quiet origin
-	else
+	# A checkout damaged by a power cut ("object file ... is empty") is thrown
+	# away and cloned again, as fetch() does for the other sources.
+	tfpi_checkout() {
+		git -C "$SRC/tfpi" checkout --quiet --force --detach "origin/$TFPI_REF" 2>/dev/null \
+			|| git -C "$SRC/tfpi" checkout --quiet --force --detach "$TFPI_REF"
+	}
+	if ! { [ -d "$SRC/tfpi/.git" ] && git -C "$SRC/tfpi" fetch --quiet origin && tfpi_checkout; }; then
+		[ -d "$SRC/tfpi" ] && echo "tfpi: checkout in $SRC/tfpi is damaged or stale, cloning it again"
 		rm -rf "$SRC/tfpi"
 		git clone --quiet "$TFPI_REPO" "$SRC/tfpi"
+		tfpi_checkout
 	fi
-	git -C "$SRC/tfpi" checkout --quiet --force --detach "origin/$TFPI_REF" 2>/dev/null \
-		|| git -C "$SRC/tfpi" checkout --quiet --force --detach "$TFPI_REF"
 	echo "tfpi at $(git -C "$SRC/tfpi" rev-parse --short HEAD)"
 	TFPI_STAGE=2 exec bash "$SRC/tfpi/install.sh" "$@"
 fi
