@@ -64,7 +64,8 @@ you can pick an older one.
 The installed build is recognised by its FPGA and CPLD images, so it doesn't
 matter what the zip was called or how it got onto the Pi.
 
-**I have an NTSC machine** (switch under Installed firmware) flashes the NTSC
+**I have an NTSC machine** (switch under Installed firmware, and on the review
+page before a flash) flashes the NTSC
 BUS CPLD (`*_bus_ntsc.jed`, no early address strobe on writes) instead of the
 standard one. It is about the motherboard's crystal, not the screen mode: an
 NTSC Amiga (as sold in North America and Japan) runs from a 28.636 MHz crystal,

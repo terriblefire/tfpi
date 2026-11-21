@@ -377,11 +377,13 @@ def create_app():
         conf = web_conf()
         conf["ntsc"] = request.form.get("on") == "1"
         save_web_conf(conf)
-        flash("NTSC machine: firmware flashes from now on use the NTSC BUS CPLD. Flash a release "
-              "again to change the CPLD now." if conf["ntsc"] else
-              "Not an NTSC machine: firmware flashes from now on use the standard BUS CPLD. Flash a "
-              "release again to change the CPLD now.", "ok")
-        return redirect(url_for("firmware_page"))
+        # from the review page: back there, where the CPLD file and plan follow the setting
+        back = request.form.get("next", "")
+        back = back if back.startswith("/review/") else ""
+        flash(("NTSC machine: firmware flashes from now on use the NTSC BUS CPLD." if conf["ntsc"] else
+               "Not an NTSC machine: firmware flashes from now on use the standard BUS CPLD.")
+              + ("" if back else " Flash a release again to change the CPLD now."), "ok")
+        return redirect(back or url_for("firmware_page"))
 
     @app.get("/api/status")
     @login_required
@@ -539,7 +541,8 @@ def create_app():
             return redirect(url_for("firmware_page"))
         state = config.load_state()
         return render_template("review.html", token=token, release=release.summary(),
-                               plan=plan(release, state), state=state, busy=busy_reason())
+                               plan=plan(release, state), state=state, busy=busy_reason(),
+                               ntsc=config.ntsc())
 
     @app.post("/flash/<token>")
     @login_required

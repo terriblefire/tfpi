@@ -58,6 +58,24 @@ class WebTests(Sandbox):
         self.client.post("/settings/ntsc", data={"csrf": self.csrf("/")})          # unticked: no field
         self.assertFalse(config.ntsc())
 
+    def test_ntsc_switch_on_review_page(self):
+        self.login()
+        files = {"tf4060r5_ram_flash.bin": full_image(), "tf4060r5_bus_prod.jed": jed(0),
+                 "tf4060r5_bus_ntsc.jed": jed(1)}
+        review = self.upload(files).headers["Location"]
+        page = self.client.get(review).get_data(as_text=True)
+        self.assertIn("I have an NTSC machine", page)
+        self.assertIn(f'name="next" value="{review}"', page)
+        self.assertIn("tf4060r5_bus_prod.jed</span><br>", page)
+        # the switch on the review page comes back to it, now with the NTSC CPLD
+        r = self.client.post("/settings/ntsc", data={"csrf": self.csrf("/"), "on": "1", "next": review})
+        self.assertTrue(r.headers["Location"].endswith(review))
+        page = self.client.get(review).get_data(as_text=True)
+        self.assertIn("tf4060r5_bus_ntsc.jed</span> <b>NTSC</b>", page)
+        # anything but a review page goes to the Firmware page
+        r = self.client.post("/settings/ntsc", data={"csrf": self.csrf("/"), "next": "//evil.example/"})
+        self.assertTrue(r.headers["Location"].endswith("/firmware"))
+
     def test_wrong_board_rejected_on_review(self):
         self.login()
         review = self.upload({"tf4060r4_ram.bin": full_image()})
