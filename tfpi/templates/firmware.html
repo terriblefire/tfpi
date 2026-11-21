@@ -46,7 +46,7 @@
 </table>
 <form method="post" action="/settings/ntsc" class="switchrow"><input type="hidden" name="csrf" value="{{ csrf }}">
 <label class="switch"><input type="checkbox" name="on" value="1" {{ 'checked' if ntsc }} onchange="this.form.submit()" aria-label="I have an NTSC machine"><span class="slider"></span></label>
-<span><b>I have an NTSC machine</b><br><span class="muted">{{ "On: firmware flashes use the NTSC BUS CPLD (tf4060r5_bus_ntsc.jed), which has no early address strobe on writes." if ntsc else "Off: firmware flashes use the standard BUS CPLD. Turn on if this Amiga runs NTSC chipset timing: the standard CPLD's early address strobe collides with motherboard fast RAM writes there." }}</span></span>
+<span><b>I have an NTSC machine</b><br>This is about the motherboard's crystal, not the screen mode you use. An NTSC Amiga (as sold in North America and Japan) runs from a 28.636 MHz crystal, a PAL one from 28.375 MHz. NTSC or DblNTSC screen modes on a PAL Amiga do not make it an NTSC machine: leave this off.<br><span class="muted">{{ "On: firmware flashes use the NTSC BUS CPLD (tf4060r5_bus_ntsc.jed), which has no early address strobe on writes." if ntsc else "Off: firmware flashes use the standard BUS CPLD. On an NTSC motherboard its early address strobe collides with motherboard fast RAM writes." }}</span></span>
 <noscript><button class="secondary">Save</button></noscript></form>
 <p class="muted">The release and checksums above are what this page last flashed. <b>Verify</b> reads the firmware back from the chips and checks it against the known releases.</p>
 {% if verify %}<table>

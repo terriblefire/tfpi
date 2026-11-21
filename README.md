@@ -66,8 +66,11 @@ matter what the zip was called or how it got onto the Pi.
 
 **I have an NTSC machine** (switch under Installed firmware) flashes the NTSC
 BUS CPLD (`*_bus_ntsc.jed`, no early address strobe on writes) instead of the
-standard one. Turn it on if the Amiga runs NTSC chipset timing: there the
-standard CPLD's early address strobe collides with motherboard fast RAM writes.
+standard one. It is about the motherboard's crystal, not the screen mode: an
+NTSC Amiga (as sold in North America and Japan) runs from a 28.636 MHz crystal,
+a PAL one from 28.375 MHz. NTSC or DblNTSC screen modes on a PAL Amiga do not
+make it an NTSC machine. On an NTSC motherboard the standard CPLD's early
+address strobe collides with motherboard fast RAM writes.
 The switch takes effect at the next flash; flash a release again to change the
 installed CPLD. A release without an NTSC CPLD flashes the standard one, with a
 warning on the review page.
