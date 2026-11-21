@@ -1,4 +1,5 @@
 {% extends "base.html" %}{% block body %}
+{% import "_macros.html" as m with context %}
 <div class="card"><h1>Review {{ release.name }}</h1>
 <table>
 <tr><th>Board</th><td>{{ release.board }}</td></tr>
@@ -9,6 +10,7 @@
 <tr><th>BUS CPLD</th><td>{% if release.cpld_sha %}<span class="mono">{{ release.cpld_file }}</span>{% if release.cpld_ntsc %} <b>NTSC</b>{% endif %}<br><span class="mono">{{ release.cpld_sha[:16] }}</span> · {{ release.cpld_device or "unknown device" }}<br>{% endif %}
   {% if plan.cpld %}<b>will be flashed</b>{% else %}<span class="muted">skipped</span>{% endif %} <span class="muted">({{ plan.cpld_reason }})</span></td></tr>
 </table>
+{{ m.ntsc_switch(ntsc, "/review/" ~ token) }}
 {% for w in release.warnings %}<p class="warn">{{ w }}</p>{% endfor %}
 {% if not release.cpld_sha and not release.jed_files %}<p class="warn">This zip has no CPLD (.jed) file, so only the FPGA can be flashed.</p>{% endif %}
 {% if plan.blocked %}<p class="bad">{{ plan.blocked }}</p>{% endif %}
