@@ -64,6 +64,14 @@ you can pick an older one.
 The installed build is recognised by its FPGA and CPLD images, so it doesn't
 matter what the zip was called or how it got onto the Pi.
 
+**I have an NTSC machine** (switch under Installed firmware) flashes the NTSC
+BUS CPLD (`*_bus_ntsc.jed`, no early address strobe on writes) instead of the
+standard one. Turn it on if the Amiga runs NTSC chipset timing: there the
+standard CPLD's early address strobe collides with motherboard fast RAM writes.
+The switch takes effect at the next flash; flash a release again to change the
+installed CPLD. A release without an NTSC CPLD flashes the standard one, with a
+warning on the review page.
+
 Builds are published by hand from the tf4060v2 repo (Gitea Actions, the
 `publish` workflow, `scripts/ghcr_publish.py`): pick a tag to publish a release,
 or `vLATEST` to publish a developer build. The build published last is the one
@@ -76,7 +84,7 @@ To check what's published from a Pi: `python3 -m tfpi.feed`
 | File | Needed | Notes |
 |---|---|---|
 | `<board>_ram_flash.bin` or `<board>_ram.bin` | yes | Full SPI flash image, or a raw iCE40 bitstream |
-| `*.jed` | no | BUS CPLD. With several, `_bus_prod`, then `_bus_top`, then `_bus` is used |
+| `*.jed` | no | BUS CPLD. With several, `_bus_prod`, then `_bus_top`, then `_bus` is used. `*_bus_ntsc.jed` is used only, and then always, with the NTSC setting on |
 | `seed.txt` | no | Shown on the page (else "seed N" from `README.md`) |
 | `spirom.img` | no | SSBL/ROMFS combined with a raw bitstream at 0x21000; can also be placed at `/etc/tfpi/spirom.img`. Without one, the raw bitstream is flashed as it is, after a warning |
 

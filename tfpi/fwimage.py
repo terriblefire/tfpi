@@ -6,7 +6,9 @@ A release zip holds:
                         a raw bitstream (flashed as it is, with a warning, when
                         there is no spirom.img)
   *.jed                 BUS CPLD. One .jed is used whatever its name; with
-                        several, _bus_prod, then _bus_top, then _bus wins
+                        several, _bus_prod, then _bus_top, then _bus wins.
+                        *_bus_ntsc.jed (no early AS, for NTSC machines) is
+                        used only, and then always, when the NTSC setting is on
   seed.txt              optional, nextpnr seed (else "seed N" in README.md)
   spirom.img            optional, SSBL/ROMFS for raw-bitstream releases
 
@@ -22,6 +24,8 @@ from pathlib import PurePosixPath
 
 SPIROM_OFFSET = 0x21000
 PREAMBLE = bytes.fromhex("ff0000ff7eaa997e")
+
+NTSC_JED_SUFFIX = "_bus_ntsc.jed"
 
 MAX_ZIP_MEMBER = 16 * 1024 * 1024
 MAX_FLASH_IMAGE = 16 * 1024 * 1024
@@ -103,6 +107,7 @@ class Release:
     cpld_file: str = None
     cpld_jed: bytes = None
     cpld_device: str = None
+    cpld_ntsc: bool = False      # cpld_file is the NTSC BUS CPLD (*_bus_ntsc.jed)
     a314_commit: str = ""        # the a314 the SPI ROM was built from (README.md)
     members: list = field(default_factory=list)
     warnings: list = field(default_factory=list)   # shown before flashing
@@ -127,6 +132,8 @@ class Release:
             "cpld_file": self.cpld_file,
             "cpld_sha": self.cpld_sha,
             "cpld_device": self.cpld_device,
+            "cpld_ntsc": self.cpld_ntsc,
+            "jed_files": [m for m in self.members if m.lower().endswith(".jed")],
             "a314_commit": self.a314_commit,
             "members": self.members,
             "warnings": self.warnings,
@@ -163,8 +170,7 @@ def _pick(files, suffixes, what):
     return None
 
 
-def _pick_jed(files):
-    jeds = sorted(name for name in files if name.lower().endswith(".jed"))
+def _pick_standard_jed(jeds):
     if len(jeds) <= 1:
         return jeds[0] if jeds else None
     for suffix in ("_bus_prod.jed", "_bus_top.jed", "_bus.jed"):
@@ -174,9 +180,33 @@ def _pick_jed(files):
     raise FirmwareError(f"cannot tell which CPLD file to use: {', '.join(jeds)}")
 
 
-def load_release(path, name=None, board=None, spirom=None):
+def _pick_jed(files, ntsc=False):
+    """The BUS CPLD file to flash and a warning (or None). The NTSC CPLD
+    (*_bus_ntsc.jed, no early AS) is picked only when `ntsc` is set, and then
+    always when the zip has one."""
+    jeds = sorted(name for name in files if name.lower().endswith(".jed"))
+    ntsc_jeds = [name for name in jeds if name.endswith(NTSC_JED_SUFFIX)]
+    standard = [name for name in jeds if not name.endswith(NTSC_JED_SUFFIX)]
+    if ntsc:
+        if len(ntsc_jeds) > 1:
+            raise FirmwareError(f"more than one NTSC CPLD file: {', '.join(ntsc_jeds)}")
+        if ntsc_jeds:
+            return ntsc_jeds[0], None
+        chosen = _pick_standard_jed(standard)
+        return chosen, (f"This release has no NTSC BUS CPLD (*{NTSC_JED_SUFFIX}), so {chosen} is "
+                        "flashed. It is built for PAL machines: on an NTSC machine it can collide with "
+                        "motherboard fast RAM writes.") if chosen else None
+    chosen = _pick_standard_jed(standard)
+    if chosen is None and ntsc_jeds:
+        return None, (f"The only CPLD file in this zip, {ntsc_jeds[0]}, is for NTSC machines and the "
+                      "NTSC setting is off, so the BUS CPLD is not flashed.")
+    return chosen, None
+
+
+def load_release(path, name=None, board=None, spirom=None, ntsc=False):
     """Parse a release zip. `board` (e.g. tf4060r5) is enforced when given.
-    `spirom` is the fallback SSBL/ROMFS bytes for raw-bitstream releases."""
+    `spirom` is the fallback SSBL/ROMFS bytes for raw-bitstream releases.
+    `ntsc` (the NTSC machine setting) picks the NTSC BUS CPLD."""
     files = _read_members(path)
     ram_name = _pick(files, ("_ram_flash.bin", "_ram.bin"), "RAM FPGA image")
     if ram_name is None:
@@ -219,9 +249,12 @@ def load_release(path, name=None, board=None, spirom=None):
             release.fpga_source = "raw bitstream + spirom.img" + (
                 " (from zip)" if "spirom.img" in files else " (from /etc/tfpi)")
 
-    jed_name = _pick_jed(files)
+    jed_name, jed_warning = _pick_jed(files, ntsc)
+    if jed_warning:
+        release.warnings.append(jed_warning)
     if jed_name is not None:
         release.cpld_file = jed_name
         release.cpld_jed = files[jed_name]
         release.cpld_device = check_jed(release.cpld_jed)
+        release.cpld_ntsc = jed_name.endswith(NTSC_JED_SUFFIX)
     return release

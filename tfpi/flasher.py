@@ -97,7 +97,9 @@ def plan(release, state, force_fpga=False, force_cpld=False):
         "blocked": None,
     }
     if release.cpld_jed is None:
-        result["cpld_reason"] = "no CPLD file in this zip"
+        result["cpld_reason"] = ("no CPLD file for this machine in this zip"
+                                 if any(m.lower().endswith(".jed") for m in release.members)
+                                 else "no CPLD file in this zip")
     elif state["cpld"].get("fault"):
         result["cpld_reason"] = "CPLD locked after a failed flash"
         result["blocked"] = ("The last CPLD flash failed (" + state["cpld"]["fault"] + "). "
@@ -234,6 +236,7 @@ def flash_cpld(release, state, work):
     cpld["flashes"] += 1
     cpld["time"] = config.now()
     cpld["sha"] = None
+    cpld["file"] = None
     config.save_state(state)
 
     log(f"CPLD: programming {release.cpld_device or 'CPLD'} (one attempt, no retries)")
@@ -249,6 +252,7 @@ def flash_cpld(release, state, work):
                          "fails erase/verify is failing and more cycles can destroy it.")
     cpld["sha"] = release.cpld_sha
     cpld["device"] = release.cpld_device
+    cpld["file"] = release.cpld_file
     cpld["last_result"] = "ok"
     config.save_state(state)
     log("CPLD: programmed and verified")
@@ -276,8 +280,11 @@ def a314d_active():
 
 def flash(zip_path, name=None, force_fpga=False, force_cpld=False):
     name = name or Path(zip_path).name
-    release = load_release(zip_path, name=name, board=config.board(), spirom=config.spirom())
+    release = load_release(zip_path, name=name, board=config.board(), spirom=config.spirom(),
+                           ntsc=config.ntsc())
     log(f"release {name}: board {release.board}, seed {release.seed or '-'}")
+    if release.cpld_file:
+        log(f"BUS CPLD file: {release.cpld_file}" + (" (NTSC)" if release.cpld_ntsc else ""))
     for warning in release.warnings:
         log("WARNING: " + warning)
     with flash_lock():
@@ -363,7 +370,8 @@ def main(argv=None):
         return 0
     if args.cmd == "inspect":
         try:
-            release = load_release(args.zip, board=config.board(), spirom=config.spirom())
+            release = load_release(args.zip, board=config.board(), spirom=config.spirom(),
+                                   ntsc=config.ntsc())
         except FirmwareError as error:
             print(f"rejected: {error}", file=sys.stderr)
             return 1

@@ -64,6 +64,30 @@ class ReleaseTests(Sandbox):
         with self.assertRaisesRegex(FirmwareError, "which CPLD"):
             pick("a.jed", "b.jed")
 
+    def test_ntsc_jed_choice(self):
+        def load(ntsc, *names):
+            files = {"tf4060r5_ram_flash.bin": full_image(), **{n: jed(i) for i, n in enumerate(names)}}
+            return load_release(make_zip(self.tmp / "n.zip", files), ntsc=ntsc)
+        both = ("tf4060r5_bus_prod.jed", "tf4060r5_bus_ntsc.jed")
+        release = load(False, *both)                                   # the default: never the NTSC CPLD
+        self.assertEqual((release.cpld_file, release.cpld_ntsc, release.warnings),
+                         ("tf4060r5_bus_prod.jed", False, []))
+        release = load(True, *both)
+        self.assertEqual((release.cpld_file, release.cpld_ntsc, release.warnings),
+                         ("tf4060r5_bus_ntsc.jed", True, []))
+        self.assertEqual(release.cpld_jed, jed(1))
+        self.assertTrue(release.summary()["cpld_ntsc"])
+        release = load(True, "tf4060r5_bus_prod.jed")                  # an older release: no NTSC CPLD
+        self.assertEqual(release.cpld_file, "tf4060r5_bus_prod.jed")
+        self.assertIn("no NTSC BUS CPLD", release.warnings[0])
+        release = load(False, "tf4060r5_bus_ntsc.jed")                 # only the NTSC CPLD, setting off
+        self.assertIsNone(release.cpld_file)
+        self.assertIn("NTSC setting is off", release.warnings[0])
+        self.assertEqual(release.summary()["jed_files"], ["tf4060r5_bus_ntsc.jed"])
+        self.assertEqual(load(True, "tf4060r5_bus_ntsc.jed").cpld_file, "tf4060r5_bus_ntsc.jed")
+        with self.assertRaisesRegex(FirmwareError, "more than one NTSC"):
+            load(True, "a_bus_ntsc.jed", "b_bus_ntsc.jed")
+
     def test_ram_flash_preferred_over_raw(self):
         z = make_zip(self.tmp / "r.zip", {"tf4060r5_ram.bin": bitstream(), "tf4060r5_ram_flash.bin": full_image()})
         self.assertEqual(load_release(z).fpga_file, "tf4060r5_ram_flash.bin")
