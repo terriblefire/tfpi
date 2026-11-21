@@ -108,6 +108,14 @@ class FeedBase(Sandbox):
 
 
 class FeedTests(FeedBase):
+    def test_installed_build_with_the_ntsc_cpld(self):
+        build = dict(self.builds[1], cpld_ntsc_sha="ab" * 32)
+        state = config.load_state()
+        state["fpga"]["sha"], state["cpld"]["sha"] = build["fpga_sha"], "ab" * 32
+        self.assertEqual(feed.installed_build([build], state), build)
+        state["cpld"]["sha"] = "cd" * 32                          # neither of the build's CPLDs
+        self.assertIsNone(feed.installed_build([build], state))
+
     def test_release_mode_hides_dev_builds(self):
         result = feed.check()
         self.assertIsNone(result["error"])

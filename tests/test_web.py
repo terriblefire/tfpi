@@ -39,6 +39,25 @@ class WebTests(Sandbox):
         self.login()
         self.assertEqual(self.client.post("/upload", data={}).status_code, 400)
 
+    def test_ntsc_switch_and_review(self):
+        self.login()
+        page = self.client.get("/firmware").get_data(as_text=True)
+        self.assertIn("I have an NTSC machine", page)
+        self.assertNotIn('value="1" checked onchange="this.form.submit()" aria-label="I have an NTSC', page)
+        files = {"tf4060r5_ram_flash.bin": full_image(), "tf4060r5_bus_prod.jed": jed(0),
+                 "tf4060r5_bus_ntsc.jed": jed(1)}
+        page = self.client.get(self.upload(files).headers["Location"]).get_data(as_text=True)
+        self.assertIn("tf4060r5_bus_prod.jed</span><br>", page)
+
+        self.client.post("/settings/ntsc", data={"csrf": self.csrf("/"), "on": "1"})
+        self.assertTrue(config.ntsc())
+        page = self.client.get("/firmware").get_data(as_text=True)
+        self.assertIn('value="1" checked onchange="this.form.submit()" aria-label="I have an NTSC', page)
+        page = self.client.get(self.upload(files, "fw2.zip").headers["Location"]).get_data(as_text=True)
+        self.assertIn("tf4060r5_bus_ntsc.jed</span> <b>NTSC</b>", page)
+        self.client.post("/settings/ntsc", data={"csrf": self.csrf("/")})          # unticked: no field
+        self.assertFalse(config.ntsc())
+
     def test_wrong_board_rejected_on_review(self):
         self.login()
         review = self.upload({"tf4060r4_ram.bin": full_image()})

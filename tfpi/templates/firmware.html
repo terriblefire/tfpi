@@ -38,11 +38,16 @@
 <tr><th>RAM FPGA</th><td>{% if state.fpga.sha %}<span class="mono">{{ state.fpga.sha[:16] }}</span>{% else %}<span class="muted">unknown</span>{% endif %}
   <span class="muted">· {{ state.fpga.flashes }} flash{{ "" if state.fpga.flashes == 1 else "es" }}{% if state.fpga.time %} · last {{ state.fpga.time }}{% endif %}</span>
   {% if state.fpga.last_result and state.fpga.last_result != "ok" %}<br><span class="bad">last result: {{ state.fpga.last_result }}</span>{% endif %}</td></tr>
-<tr><th>BUS CPLD</th><td>{% if state.cpld.sha %}<span class="mono">{{ state.cpld.sha[:16] }}</span> {{ state.cpld.device or "" }}{% else %}<span class="muted">unknown</span>{% endif %}
+<tr><th>BUS CPLD</th><td>{% if state.cpld.file %}<span class="mono">{{ state.cpld.file }}</span><br>{% endif %}{% if state.cpld.sha %}<span class="mono">{{ state.cpld.sha[:16] }}</span> {{ state.cpld.device or "" }}{% else %}<span class="muted">unknown</span>{% endif %}
   <span class="muted">· {{ state.cpld.flashes }} flash{{ "" if state.cpld.flashes == 1 else "es" }}{% if state.cpld.time %} · last {{ state.cpld.time }}{% endif %}</span>
-  {% if state.cpld.fault %}<br><span class="bad">LOCKED: {{ state.cpld.fault }}</span>{% endif %}</td></tr>
+  {% if state.cpld.fault %}<br><span class="bad">LOCKED: {{ state.cpld.fault }}</span>{% endif %}
+  {% if state.cpld.sha and state.cpld.file and state.cpld.file.endswith("_bus_ntsc.jed") != ntsc %}<br><span class="warn">This is the {{ "NTSC" if state.cpld.file.endswith("_bus_ntsc.jed") else "standard" }} BUS CPLD, but the NTSC setting below is {{ "on" if ntsc else "off" }}: flash a release again to change it.</span>{% endif %}</td></tr>
 <tr><th>a314d</th><td class="{{ 'ok' if a314d == 'active' else 'warn' }}">{{ a314d }}</td></tr>
 </table>
+<form method="post" action="/settings/ntsc" class="switchrow"><input type="hidden" name="csrf" value="{{ csrf }}">
+<label class="switch"><input type="checkbox" name="on" value="1" {{ 'checked' if ntsc }} onchange="this.form.submit()" aria-label="I have an NTSC machine"><span class="slider"></span></label>
+<span><b>I have an NTSC machine</b><br><span class="muted">{{ "On: firmware flashes use the NTSC BUS CPLD (tf4060r5_bus_ntsc.jed), which has no early address strobe on writes." if ntsc else "Off: firmware flashes use the standard BUS CPLD. Turn on if this Amiga runs NTSC chipset timing: the standard CPLD's early address strobe collides with motherboard fast RAM writes there." }}</span></span>
+<noscript><button class="secondary">Save</button></noscript></form>
 <p class="muted">The release and checksums above are what this page last flashed. <b>Verify</b> reads the firmware back from the chips and checks it against the known releases.</p>
 {% if verify %}<table>
 <tr><th>Verified</th><td>{{ verify.time }}{% if not verify.restore_ok %} <span class="bad">· not restored: {{ verify.advice or "see the log" }}</span>{% endif %}</td></tr>

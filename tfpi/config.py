@@ -85,13 +85,18 @@ def read_json(path, default):
         return default
 
 
+def ntsc():
+    """The "I have an NTSC machine" setting (web.json): flash the NTSC BUS CPLD."""
+    return bool(read_json(WEB_CONF, {}).get("ntsc"))
+
+
 def empty_state():
     return {
         "release": None,          # name of the zip last flashed through this tool
         "seed": None,
         "fpga": {"sha": None, "flashes": 0, "last_result": None, "time": None},
         "cpld": {"sha": None, "device": None, "flashes": 0, "last_result": None,
-                 "time": None, "fault": None},
+                 "time": None, "fault": None, "file": None},
         "history": [],
     }
 

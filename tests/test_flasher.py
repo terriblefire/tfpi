@@ -27,6 +27,23 @@ class FlasherTests(Sandbox):
         self.assertEqual(self.cpld_flashes(), 1)                          # no extra erase cycle
         self.assertEqual(config.load_state()["history"][0]["result"], "nothing to do")
 
+    def test_ntsc_setting_picks_the_ntsc_cpld(self):
+        z = make_zip(self.tmp / "n.zip", {"tf4060r5_ram_flash.bin": full_image(),
+                                          "tf4060r5_bus_prod.jed": jed(0), "tf4060r5_bus_ntsc.jed": jed(1)})
+        self.assertEqual(self.flash(z), 0)
+        state = config.load_state()
+        self.assertEqual(state["cpld"]["file"], "tf4060r5_bus_prod.jed")
+        self.assertEqual(self.cpld_flashes(), 1)
+
+        config.write_json(config.WEB_CONF, {"ntsc": True})
+        self.assertEqual(self.flash(z), 0)                     # same release: the CPLD changes, the FPGA doesn't
+        state = config.load_state()
+        self.assertEqual(state["cpld"]["file"], "tf4060r5_bus_ntsc.jed")
+        self.assertEqual(self.cpld_flashes(), 2)
+        self.assertEqual(state["fpga"]["flashes"], 1)
+        self.assertEqual(self.flash(z), 0)
+        self.assertEqual(self.cpld_flashes(), 2)               # NTSC CPLD installed: nothing to do
+
     def test_new_fpga_same_cpld_skips_cpld(self):
         self.flash(self.release("a.zip"))
         self.assertEqual(self.flash(self.release("b.zip", fpga=1)), 0)

@@ -236,13 +236,14 @@ def developer():
 
 
 def installed_build(builds, state):
-    """The catalog entry whose images are what this tool last flashed."""
+    """The catalog entry whose images are what this tool last flashed. The CPLD
+    may be the build's standard JED or its NTSC one (cpld_ntsc_sha)."""
     fpga, cpld = state.get("fpga", {}).get("sha"), state.get("cpld", {}).get("sha")
     if not fpga:
         return None
     for build in builds:
         if build.get("fpga_sha") == fpga and (not cpld or not build.get("cpld_sha")
-                                              or build.get("cpld_sha") == cpld):
+                                              or cpld in (build.get("cpld_sha"), build.get("cpld_ntsc_sha"))):
             return build
     return None
 

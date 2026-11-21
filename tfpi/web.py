@@ -232,7 +232,7 @@ def create_app():
                                verify=diag.last_verify(), verify_warning=diag.VERIFY_WARNING,
                                warning_screen=diag.WARNING_SCREEN,
                                firmware=feed.view(feed.cached(), state, feed.developer()),
-                               updating=update.running())
+                               ntsc=config.ntsc(), updating=update.running())
 
     @app.get("/")
     @login_required
@@ -369,6 +369,18 @@ def create_app():
         save_web_conf(conf)
         flash("Developer mode on: developer builds are listed too. They are not tested releases."
               if conf["developer"] else "Developer mode off: only release builds are offered.", "ok")
+        return redirect(url_for("firmware_page"))
+
+    @app.post("/settings/ntsc")
+    @login_required
+    def set_ntsc():
+        conf = web_conf()
+        conf["ntsc"] = request.form.get("on") == "1"
+        save_web_conf(conf)
+        flash("NTSC machine: firmware flashes from now on use the NTSC BUS CPLD. Flash a release "
+              "again to change the CPLD now." if conf["ntsc"] else
+              "Not an NTSC machine: firmware flashes from now on use the standard BUS CPLD. Flash a "
+              "release again to change the CPLD now.", "ok")
         return redirect(url_for("firmware_page"))
 
     @app.get("/api/status")
@@ -519,7 +531,8 @@ def create_app():
     def review(token):
         path = upload_zip(token)
         try:
-            release = load_release(path, name=path.name, board=config.board(), spirom=config.spirom())
+            release = load_release(path, name=path.name, board=config.board(), spirom=config.spirom(),
+                                   ntsc=config.ntsc())
         except FirmwareError as error:
             flash(f"{path.name} rejected: {error}", "error")
             shutil.rmtree(path.parent, ignore_errors=True)
