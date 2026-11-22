@@ -932,7 +932,9 @@ def create_app():
 
 
 def prune_jobs(keep=20):
-    logs = sorted(config.JOB_DIR.glob("*.log"))
+    """Keep the newest `keep` job logs. By time: the names have different prefixes
+    (flash jobs start with the date, others with diag-, update-, verify-)."""
+    logs = sorted(config.JOB_DIR.glob("*.log"), key=lambda p: p.stat().st_mtime)
     for old in logs[:-keep]:
         old.unlink(missing_ok=True)
         old.with_suffix(".json").unlink(missing_ok=True)

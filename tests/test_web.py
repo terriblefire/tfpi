@@ -76,6 +76,23 @@ class WebTests(Sandbox):
         r = self.client.post("/settings/ntsc", data={"csrf": self.csrf("/"), "next": "//evil.example/"})
         self.assertTrue(r.headers["Location"].endswith("/firmware"))
 
+    def test_prune_jobs_keeps_the_newest_by_time(self):
+        # 25 older update- logs, then a flash job (named by date, which sorts first)
+        from tfpi.web import prune_jobs
+        import os
+        config.JOB_DIR.mkdir(parents=True, exist_ok=True)
+        for i in range(25):
+            log = config.JOB_DIR / f"update-20261101-0000{i:02d}-aaaaaa.log"
+            log.write_text("old")
+            os.utime(log, (1000 + i, 1000 + i))
+        flash_log = config.JOB_DIR / "20261122-114922-252913.log"
+        flash_log.write_text("new")
+        prune_jobs()
+        logs = sorted(config.JOB_DIR.glob("*.log"))
+        self.assertEqual(len(logs), 20)
+        self.assertTrue(flash_log.exists())
+        self.assertFalse((config.JOB_DIR / "update-20261101-000000-aaaaaa.log").exists())
+
     def test_wrong_board_rejected_on_review(self):
         self.login()
         review = self.upload({"tf4060r4_ram.bin": full_image()})
