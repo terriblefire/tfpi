@@ -205,6 +205,34 @@ else
 	echo "a314: unchanged, a314d left running"
 fi
 
+# --- a314 services added since this Pi's a314d.conf was written -------------
+# install-pi.sh writes /etc/opt/a314/a314d.conf only when it is missing, so a
+# service a314 adds later (scsi, usbhw, ...) would never start on an older Pi.
+# Each service line of the installed a314's a314d.conf whose name the Pi's file
+# lacks is appended; the Pi's own lines stay as they are, and a "#name" line
+# keeps that service out. a314d reads the file when it starts: after a rebuild
+# that is at the end of this install, otherwise at its next start.
+a314_conf=/etc/opt/a314/a314d.conf
+a314_conf_new=$SRC/a314/Software/a314d/a314d.conf
+# The checkout can be gone with a314 unchanged (an install that lost the
+# network inside fetch deleted it): fetch the installed commit again, no rebuild.
+if [ -f "$a314_conf" ] && [ ! -f "$a314_conf_new" ]; then
+	fetch a314 "$A314_REPO" "$A314_COMMIT" "$A314_USER" || true
+fi
+if [ -f "$a314_conf" ] && [ -f "$a314_conf_new" ]; then
+	a314_added=$(awk 'NR == FNR { n = $1; sub(/^#+/, "", n); if (n != "") have[n] = 1; next }
+		NF >= 2 && $1 !~ /^#/ && !($1 in have)' "$a314_conf" "$a314_conf_new")
+	if [ -n "$a314_added" ]; then
+		[ -z "$(tail -c1 "$a314_conf")" ] || echo >> "$a314_conf"
+		printf '%s\n' "$a314_added" >> "$a314_conf"
+		echo "a314: services added to $a314_conf:$(printf '%s\n' "$a314_added" | awk '{printf " %s", $1}')"
+	else
+		echo "a314: $a314_conf has every service"
+	fi
+else
+	echo "a314: no $a314_conf or no a314 checkout; services not checked"
+fi
+
 # --- tfpi web page + flasher ------------------------------------------------
 install -d "$PREFIX/lib"
 rm -rf "$PREFIX/lib/tfpi" "$PREFIX/lib/tfdiag"
