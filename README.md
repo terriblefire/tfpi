@@ -100,6 +100,13 @@ set in `/etc/tfpi/tfpi.conf` (`BOARD=tf4060r5`).
 - The SPI flash is identified by its JEDEC ID first; an image bigger than the chip is refused.
 - The FPGA flash is read back and compared before the FPGA is reset; then CDONE
   (GPIO 23) must go high.
+- The CPLD is first looked for on the JTAG chain, up to three times; that only
+  reads its ID. If it isn't found, nothing has been erased or written, and you can
+  just flash again.
+- Its fuses are then read back and compared with the release, on every flash,
+  also when tfpi's record says this image is already installed. If they already
+  match, it isn't erased or programmed. If the CPLD isn't found but tfpi's record
+  says it already holds this image, the flash carries on with a warning.
 - The CPLD is programmed **once** per flash, with verify. If erase or verify
   fails, the CPLD is locked out on this Pi: a CPLD that fails verify is failing,
   and more erase cycles can destroy it. Check or replace the chip, then run
@@ -217,7 +224,7 @@ rebuilds everything.
 ```
 sudo tfpi-flash status
 sudo tfpi-flash inspect release.zip
-sudo tfpi-flash flash release.zip [--force-fpga] [--force-cpld]
+sudo tfpi-flash flash release.zip [--force-fpga]
 sudo tfpi-flash clear-cpld-fault
 sudo tfpi-update          # rebuild at the commits pinned in sources.conf
 ```

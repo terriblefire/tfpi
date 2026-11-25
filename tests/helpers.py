@@ -76,14 +76,39 @@ STUBS = {
     ''',
     "xc3sprog": r'''
         import os, sys
-        open(os.environ["FAKE_XC3_LOG"], "a").write(" ".join(sys.argv[1:]) + "\n")
-        open(os.environ["FAKE_CALLS"], "a").write("xc3sprog\n")
         # Real banner: contains the word "failure" on every run.
         print("XC3SPROG (c) 2004-2011 xc3sprog project $Rev: 774 $ OS: Linux")
         print("Feedback on success/failure/enhancement requests:")
+        if "-j" in sys.argv:
+            # Chain detect: FAKE_XC3_NOCHAIN = how many reads find no chain.
+            open(os.environ["FAKE_CALLS"], "a").write("xc3sprog -j\n")
+            count = os.environ["FAKE_XC3_LOG"] + ".j"
+            reads = (int(open(count).read()) if os.path.exists(count) else 0) + 1
+            open(count, "w").write(str(reads))
+            if reads <= int(os.environ.get("FAKE_XC3_NOCHAIN") or 0):
+                print("No JTAG Chain found")                  # xc3sprog -j still exits 0
+            else:
+                print("JTAG loc.:   0  IDCODE: 0x59616093  Desc:                      XC95288XL Rev: F  IR length:  8")
+            sys.exit(0)
+        # The chip: FAKE_CPLD holds the JEDEC file last programmed into it.
+        chip = os.environ["FAKE_CPLD"]
+        held = open(chip, "rb").read() if os.path.exists(chip) else None
+        jed = sys.argv[-1]
+        if jed.endswith(":v"):                                  # verify only, no erase
+            open(os.environ["FAKE_CALLS"], "a").write("xc3sprog :v\n")
+            print("JTAG chainpos: 0 Device IDCODE = 0x59616093\tDesc: XC95288XL")
+            if held != open(jed[:-2], "rb").read():
+                print("Mismatch at fuse      0: 1 vs 0"); sys.exit(1)
+            print("Success! Verify time 1799.3 ms"); sys.exit(0)
+        open(os.environ["FAKE_XC3_LOG"], "a").write(" ".join(sys.argv[1:]) + "\n")
+        open(os.environ["FAKE_CALLS"], "a").write("xc3sprog\n")
+        if os.environ.get("FAKE_XC3_PROG_NOCHAIN"):
+            print("No JTAG Chain found"); sys.exit(2)
         print("JTAG chainpos: 0 Device IDCODE = 0x59616093\tDesc: XC95288XL")
         if os.environ.get("FAKE_XC3_FAIL"):
+            os.path.exists(chip) and os.unlink(chip)
             print("Mismatch at fuse  12345: 0 vs 1"); sys.exit(1)
+        open(chip, "wb").write(open(jed, "rb").read())
         print("Success! Verify time 1799.3 ms")
     ''',
     "pinctrl": r'''
@@ -126,11 +151,12 @@ class Sandbox(unittest.TestCase):
             "TFPI_PINCTRL": str(bindir / "pinctrl"), "TFPI_SYSTEMCTL": str(bindir / "systemctl"),
             "TFPI_SETGPIO": str(setgpio),
             "FAKE_FLASH": str(self.tmp / "spiflash.bin"), "FAKE_XC3_LOG": str(self.tmp / "xc3.log"),
-            "FAKE_A314": str(self.tmp / "a314"),
+            "FAKE_A314": str(self.tmp / "a314"), "FAKE_CPLD": str(self.tmp / "cpld_chip.jed"),
             "FAKE_CALLS": str(self.tmp / "calls.log"),
         }
         self._saved = {key: os.environ.get(key) for key in
-                       list(self.env) + ["FAKE_FOMU_CORRUPT", "FAKE_XC3_FAIL", "FAKE_CDONE_LOW", "FAKE_SPI_ID"]}
+                       list(self.env) + ["FAKE_FOMU_CORRUPT", "FAKE_XC3_FAIL", "FAKE_CDONE_LOW", "FAKE_SPI_ID",
+                                        "FAKE_XC3_NOCHAIN", "FAKE_XC3_PROG_NOCHAIN"]}
         os.environ.update(self.env)
         (self.tmp / "etc").mkdir()
         (self.tmp / "a314").write_text("active")
