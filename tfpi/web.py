@@ -558,8 +558,6 @@ def create_app():
                "--result", str(config.JOB_DIR / f"{job}.json")]
         if request.form.get("force_fpga"):
             cmd.append("--force-fpga")
-        if request.form.get("force_cpld"):
-            cmd.append("--force-cpld")
         return start_job(job, cmd)
 
     def job_file(job, suffix):

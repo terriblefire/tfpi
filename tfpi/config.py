@@ -109,6 +109,11 @@ def load_state():
             state[key].update(value)
         else:
             state[key] = value
+    # tfpi 1.5 and older also locked the CPLD when xc3sprog found no JTAG chain.
+    # xc3sprog stops there before it erases anything, so that CPLD was never touched.
+    fault = state["cpld"].get("fault")
+    if isinstance(fault, str) and "No JTAG Chain found" in fault:
+        state["cpld"]["fault"] = None
     return state
 
 
