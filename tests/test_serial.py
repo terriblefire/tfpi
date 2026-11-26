@@ -97,6 +97,12 @@ class SerialPage(Sandbox):
         secret = self.client.application.config["SECRET_KEY"]
         self.assertTrue(serialws.check_token(secret, token))
         self.assertIn(":{}/serial?t=".format(serialws.PORT), page.replace('" + location.hostname + "', ""))
+        # the terminal size for TFCON: (pi), on connecting and on resizes
+        self.assertIn(r'ws.send("\x1b[8;" + term.rows + ";" + term.cols + "t")', page)
+        self.assertIn("ws.onopen = sendSize", page)
+        self.assertIn("term.onResize(sendSize)", page)
+        # the fit addon reads #term's computed size: without padding in it (#152)
+        self.assertIn("#term { box-sizing:content-box;", page)
         fresh = self.client.get("/serial/token").get_json()["token"]
         self.assertTrue(serialws.check_token(secret, fresh))
         self.dir.mkdir()
