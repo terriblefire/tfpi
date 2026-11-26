@@ -2,7 +2,10 @@
 <link rel="stylesheet" href="/static/xterm/xterm.css">
 <style>
 main { max-width:1200px; }     /* room for the terminal */
-#term { height:65vh; min-height:240px; background:#1e1e1e; padding:6px; border-radius:6px; }
+/* content-box: the fit addon sizes the terminal from this element's computed width
+   and height, which with border-box would include the padding: one column too many
+   (under the scrollbar) and the last row cut off */
+#term { box-sizing:content-box; height:65vh; min-height:240px; background:#1e1e1e; padding:6px; border-radius:6px; }
 .termfoot { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:10px; }
 .termfoot .actions { display:flex; align-items:center; gap:14px; }
 </style>
@@ -38,6 +41,7 @@ function connect() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   let first = true;
   ws = new WebSocket(proto + "://" + location.hostname + ":{{ ws_port }}/serial?t=" + encodeURIComponent(token));
+  ws.onopen = sendSize;
   ws.onmessage = (ev) => {
     const m = JSON.parse(ev.data);
     if (first) {
@@ -65,6 +69,13 @@ async function reconnect() {
   connect();
 }
 term.onData((data) => { if (ws && ws.readyState === WebSocket.OPEN) ws.send(data); });
+// The terminal's size, on connecting and on every resize, as xterm's window
+// size report (ESC [ 8 ; rows ; cols t). The Amiga's TFCON: keeps it and
+// gives it to programs that ask (pi, and through it emacs etc. on this Pi).
+function sendSize() {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send("\x1b[8;" + term.rows + ";" + term.cols + "t");
+}
+term.onResize(sendSize);
 document.getElementById("clear").addEventListener("click", () => { term.clear(); term.focus(); });
 connect();
 })();
