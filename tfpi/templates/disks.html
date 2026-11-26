@@ -1,0 +1,146 @@
+{% extends "base.html" %}{% block title %}Disks · TF Pi{% endblock %}{% block body %}
+{% macro human(n) %}{% if n < 1024 %}{{ n }} B{% elif n < 1048576 %}{{ (n / 1024) | round(1) }} KB{% elif n < 1073741824 %}{{ (n / 1048576) | round(1) }} MB{% else %}{{ (n / 1073741824) | round(2) }} GB{% endif %}{% endmacro %}
+<style>
+#drop { border:2px dashed var(--line); border-radius:8px; padding:18px; text-align:center; margin:12px 0; }
+#drop.over { border-color:var(--accent); background:color-mix(in srgb, var(--accent) 8%, transparent); }
+table.units td, table.images td { border-bottom:1px solid var(--line); padding:6px 8px 6px 0; vertical-align:middle; }
+table.units select { font:inherit; padding:4px; max-width:100%; }
+.size { white-space:nowrap; color:var(--muted); font-size:13px; }
+form.convert { margin-top:6px; font-size:13px; } form.convert label { margin:0 8px; }
+#conversion progress { width:160px; vertical-align:middle; }
+.actions { white-space:nowrap; text-align:right; } .actions button { padding:4px 9px; font-size:13px; }
+#queue div { display:flex; gap:10px; align-items:center; font-size:13px; padding:3px 0; }
+#queue .name { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#queue progress { width:120px; }
+</style>
+
+<div class="card">
+<h1>Amiga SCSI units</h1>
+<p class="muted">a314scsi.device shows the Amiga up to four disks, each an image on this Pi. On the Amiga, after
+<span class="mono">TF4060:Portable_A314</span>, run <span class="mono">TF4060:a314/Devs/a314scsi.device</span>: a hard disk
+image's partitions mount from its RDB, and a CD image appears as <span class="mono">CD&lt;unit&gt;:</span>.
+Changing a unit here is a disk change on the Amiga.</p>
+{% if not installed %}<div class="warning"><p>a314's scsi service isn't installed on this Pi. Update tfpi (Updates tab) to get it.</p></div>
+{% elif not cd %}<div class="warning"><p>This Pi's a314 has no CD support yet. Update tfpi (Updates tab) to use CD images.</p></div>{% endif %}
+<form method="post" action="/disks/units">
+<input type="hidden" name="csrf" value="{{ csrf }}">
+<table class="units">
+{% for u in units %}
+<tr><td><b>Unit {{ u.unit }}</b></td>
+<td><select name="image{{ u.unit }}" data-unit="{{ u.unit }}" class="image" aria-label="Image for unit {{ u.unit }}">
+<option value="">(empty)</option>
+{% if u.filename and not u.name %}<option value="{{ keep }}" selected>{{ u.filename }} (set by hand, kept)</option>{% endif %}
+{% for i in images %}{% set off = (not i.usable) and u.name != i.name %}<option value="{{ i.name }}" data-cd="{{ 1 if i.cd else 0 }}" {{ 'selected' if u.name == i.name }} {{ 'disabled' if off }}>{{ i.name }}{% if off %} ({{ 'see its .bin' if i.name.lower().endswith('.cue') else i.note }}){% endif %}</option>{% endfor %}
+</select>
+{% if u.filename and not u.present %} <span class="bad" title="{{ u.filename }}">missing</span>{% endif %}</td>
+<td><select name="kind{{ u.unit }}" id="kind{{ u.unit }}" aria-label="Type of unit {{ u.unit }}">
+{% for key, k in kinds.items() %}<option value="{{ key }}" {{ 'selected' if u.kind == key }} {{ 'disabled' if key == 'cd' and not cd and u.kind != 'cd' }}>{{ k[0] }}</option>{% endfor %}
+</select></td></tr>
+{% endfor %}
+</table>
+<p><button>Save</button> <span class="muted">Written to <span class="mono">{{ conf }}</span>.</span></p>
+</form>
+</div>
+
+<div class="card">
+<h1>Images</h1>
+<p class="muted"><span class="mono">{{ root }}</span>{% if free is not none %} · {{ human(free) }} free{% endif %} ·
+hard disk images: <span class="mono">.hdf .img .vhd</span> (fixed VHD) · CD images: <span class="mono">.iso</span>, <span class="mono">.bin</span> with its <span class="mono">.cue</span></p>
+<div id="drop">Drop disk or CD images here<br>
+<label class="button" style="display:inline-block;margin-top:8px">Choose files<input id="pick" type="file" accept=".hdf,.img,.vhd,.iso,.bin,.cue" multiple hidden></label>
+</div>
+<div id="queue"></div>
+{% if conversion %}<p class="{{ 'bad' if conversion.error else 'ok' if conversion.finished else '' }}" id="conversion">
+{% if conversion.error %}Converting {{ conversion.name }} failed: {{ conversion.error }}
+{% elif conversion.finished %}Converted {{ conversion.name }} to {{ conversion.target }}.
+{% else %}Converting {{ conversion.name }} to {{ conversion.target }}: {{ (100 * conversion.done / conversion.total) | round | int if conversion.total else 0 }}%
+<progress max="{{ conversion.total }}" value="{{ conversion.done }}"></progress>{% endif %}</p>{% endif %}
+<table class="images">
+{% for i in images %}
+<tr><td>{{ i.name }}{% if i.used_by %} <span class="muted">· unit {{ i.used_by | join(", ") }}</span>{% endif %}
+{% if i.note %}<br><span class="{{ 'muted' if i.usable or i.name.lower().endswith('.cue') and not i.convert else 'warn' }}">{{ i.note }}</span>{% endif %}
+{% if i.convert %}<form method="post" action="/disks/convert" class="convert"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="name" value="{{ i.name }}">
+The Amiga needs 2048-byte sectors: convert it to <span class="mono">{{ i.name.rsplit('.', 1)[0] }}.iso</span>?
+<label><input type="checkbox" name="keep" value="1" checked> keep the original{{ ' .cue and .bin' if i.name.lower().endswith('.cue') else ' .bin' }}</label>
+<button class="secondary" {{ 'disabled' if converting }}>Convert</button></form>{% endif %}</td>
+<td class="size">{{ human(i.size) }}</td>
+<td class="actions">{% set busy = "In a unit: take it out of the unit first" if i.used_by else "" %}
+<form class="inline" method="post" action="/disks/rename" onsubmit="return askName(this, {{ i.name | tojson | forceescape }})"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="name" value="{{ i.name }}"><input type="hidden" name="new"><button class="secondary" {{ 'disabled' if busy }} title="{{ busy }}">Rename</button></form>
+<form class="inline" method="post" action="/disks/delete" onsubmit="return confirm({{ ('Delete ' ~ i.name ~ '?') | tojson | forceescape }})"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="name" value="{{ i.name }}"><button class="secondary" {{ 'disabled' if busy }} title="{{ busy }}">Delete</button></form>
+</td></tr>
+{% else %}<tr><td colspan="3" class="muted">No images yet.</td></tr>{% endfor %}
+</table>
+</div>
+
+<script>
+const CSRF = {{ csrf | tojson }};
+{% if converting %}setTimeout(() => location.reload(), 2000);{% endif %}
+
+// Picking an image sets the type that goes with it.
+for (const sel of document.querySelectorAll("select.image")) sel.addEventListener("change", () => {
+  const kind = document.getElementById("kind" + sel.dataset.unit), opt = sel.selectedOptions[0];
+  if (!opt || !opt.dataset.cd) return;
+  if (opt.dataset.cd === "1") kind.value = "cd";
+  else if (kind.value === "cd") kind.value = "hd";
+});
+
+function askName(form, current) {
+  const name = prompt("New name", current);
+  if (!name || name === current) return false;
+  form.querySelector("input[name=new]").value = name;
+  return true;
+}
+
+// Each upload is a PUT of the raw file: the Pi writes it straight to the card.
+function put(file, overwrite, row) {
+  return new Promise(resolve => {
+    const xhr = new XMLHttpRequest();
+    const q = new URLSearchParams({name: file.name});
+    if (overwrite) q.set("overwrite", "1");
+    xhr.open("PUT", "/disks/upload?" + q);
+    xhr.setRequestHeader("X-CSRF", CSRF);
+    xhr.setRequestHeader("Content-Type", "application/octet-stream");
+    xhr.upload.onprogress = e => { if (e.lengthComputable) row.bar.value = e.loaded / e.total; };
+    xhr.upload.onload = () => { row.state.textContent = "writing…"; };
+    xhr.onload = () => {
+      let reply = {};
+      try { reply = JSON.parse(xhr.responseText); } catch (e) {}
+      resolve({status: xhr.status, reply});
+    };
+    xhr.onerror = () => resolve({status: 0, reply: {error: "connection lost"}});
+    xhr.send(file);
+  });
+}
+
+function addRow(name) {
+  const div = document.createElement("div");
+  div.innerHTML = '<span class="name"></span><progress max="1" value="0"></progress><span class="state muted">waiting</span>';
+  div.querySelector(".name").textContent = name;
+  document.getElementById("queue").append(div);
+  return {bar: div.querySelector("progress"), state: div.querySelector(".state")};
+}
+
+async function upload(list) {
+  if (!list.length) return;
+  const rows = list.map(f => addRow(f.name));
+  let failed = 0;
+  for (const [n, file] of list.entries()) {
+    const row = rows[n];
+    row.state.textContent = "uploading";
+    let {status, reply} = await put(file, false, row);
+    if (status === 409 && reply.exists && confirm(`${file.name} already exists. Replace it?`))
+      ({status, reply} = await put(file, true, row));
+    if (status === 200) { row.bar.value = 1; row.state.textContent = "done"; row.state.className = "state ok"; }
+    else { failed++; row.state.textContent = reply.error || ("failed (" + status + ")"); row.state.className = "state bad"; }
+  }
+  if (!failed) setTimeout(() => location.reload(), 600);
+  else { const again = document.createElement("button"); again.className = "secondary"; again.textContent = "Refresh list"; again.onclick = () => location.reload(); document.getElementById("queue").append(again); }
+}
+
+const drop = document.getElementById("drop");
+for (const ev of ["dragenter", "dragover"]) drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("over"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+drop.addEventListener("drop", e => { e.preventDefault(); drop.classList.remove("over"); upload([...e.dataTransfer.files]); });
+document.getElementById("pick").onchange = e => upload([...e.target.files]);
+</script>
+{% endblock %}

@@ -135,7 +135,10 @@ class WebTests(Sandbox):
         index = self.client.get("/firmware").get_data(as_text=True)
         self.assertIn("fw.zip", index)
         self.assertIn("(installed)", index)
-        # Rollback/review of the stored zip now says nothing to flash.
+        # Rollback/review of the stored zip: the FPGA is skipped, the CPLD read back.
         again = self.client.post("/stored/fw.zip", data={"csrf": self.csrf("/")})
         page = self.client.get(again.headers["Location"]).get_data(as_text=True)
-        self.assertEqual(page.count("already installed"), 2)
+        self.assertEqual(page.count("already installed"), 1)          # the FPGA
+        self.assertIn("will be read back, and programmed only if it differs", page)
+        self.assertIn("recorded as installed", page)
+        self.assertNotIn("force_cpld", page)

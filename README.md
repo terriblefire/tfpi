@@ -100,6 +100,13 @@ set in `/etc/tfpi/tfpi.conf` (`BOARD=tf4060r5`).
 - The SPI flash is identified by its JEDEC ID first; an image bigger than the chip is refused.
 - The FPGA flash is read back and compared before the FPGA is reset; then CDONE
   (GPIO 23) must go high.
+- The CPLD is first looked for on the JTAG chain, up to three times; that only
+  reads its ID. If it isn't found, nothing has been erased or written, and you can
+  just flash again.
+- Its fuses are then read back and compared with the release, on every flash,
+  also when tfpi's record says this image is already installed. If they already
+  match, it isn't erased or programmed. If the CPLD isn't found but tfpi's record
+  says it already holds this image, the flash carries on with a warning.
 - The CPLD is programmed **once** per flash, with verify. If erase or verify
   fails, the CPLD is locked out on this Pi: a CPLD that fails verify is failing,
   and more erase cycles can destroy it. Check or replace the chip, then run
@@ -198,6 +205,33 @@ delete and make folders from the list.
 - a314fs keeps protection bits and comments in `<name>:a314` files; these are
   hidden here and follow their file when it is renamed or deleted.
 
+## Disks for the Amiga (a314scsi)
+
+The **Disks** tab chooses the disk images that `a314scsi.device` shows the
+Amiga: up to four SCSI units, each an image file on the Pi. On the Amiga, after
+`TF4060:Portable_A314`, run `TF4060:a314/Devs/a314scsi.device`: a hard disk
+image's partitions mount from its RDB, and a CD image appears as `CD<unit>:`
+(with ODFileSystem, resident in the TF4060 SPI ROM).
+
+- Images live in `~/a314hdfs`. Hard disk images: `.hdf`, `.img` (raw) and
+  `.vhd` (fixed VHDs only: a dynamic or differencing VHD isn't plain blocks).
+  CD images: `.iso`, and `.bin` with or without its `.cue`. Upload them on the
+  page (same streaming upload as the Files tab), rename or delete them there.
+- a314's `scsi.py` reads a CD unit as plain 2048-byte sectors. A `.bin` whose
+  data track is MODE1/2048 at its start goes in a unit as it is. A raw `.bin`
+  (2352 or 2336 bytes per sector, found from its `.cue` or its sync bytes)
+  can't: the page asks whether to convert it to an `.iso` of its first data
+  track (audio tracks are left out) and whether to keep the original
+  `.bin`/`.cue`. A `.bin` named in a `.cue` can't be renamed (the `.cue` would
+  no longer find it); the `.cue` can.
+- Each unit is empty, a hard disk (read/write or read-only, 512-byte blocks)
+  or a CD-ROM (2048-byte blocks, always read-only). Saving writes
+  `/etc/opt/a314/scsi.conf` and tells a314's `scsi.py` to read it again; the
+  Amiga sees each changed unit as a disk change.
+- An image in a unit can't be renamed, deleted or replaced until it is taken
+  out of the unit. A read/write image can be in one unit only.
+- A unit set by hand to a file outside `~/a314hdfs` is shown and kept as it is.
+
 ## Updating the Pi software
 
 The page checks GitHub for a newer tfpi about twice a day (or on **Check for
@@ -217,7 +251,7 @@ rebuilds everything.
 ```
 sudo tfpi-flash status
 sudo tfpi-flash inspect release.zip
-sudo tfpi-flash flash release.zip [--force-fpga] [--force-cpld]
+sudo tfpi-flash flash release.zip [--force-fpga]
 sudo tfpi-flash clear-cpld-fault
 sudo tfpi-update          # rebuild at the commits pinned in sources.conf
 ```

@@ -22,12 +22,12 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 
 from . import __version__, config
-from . import compat, custom, diag, feed, files, sdk, serial, serialws, update
+from . import compat, custom, diag, disks, feed, files, sdk, serial, serialws, update
 from .flasher import plan
 from .fwimage import FirmwareError, load_release
 
 TOKEN_CHARS = set("0123456789abcdef")
-FORM_MAX = 8 * 1024 * 1024            # everything except share uploads
+FORM_MAX = 8 * 1024 * 1024            # everything except share and disk image uploads
 
 
 def secure_amiga_name(filename):
@@ -134,8 +134,9 @@ def create_app():
 
     @app.before_request
     def size_limit():
-        # Share uploads stream straight to disk and may be large; nothing else may.
-        if request.endpoint != "files_upload" and (request.content_length or 0) > FORM_MAX:
+        # Share and disk image uploads stream straight to disk and may be large;
+        # nothing else may.
+        if request.endpoint not in ("files_upload", "disks_upload") and (request.content_length or 0) > FORM_MAX:
             abort(413)
 
     @app.before_request
@@ -557,8 +558,6 @@ def create_app():
                "--result", str(config.JOB_DIR / f"{job}.json")]
         if request.form.get("force_fpga"):
             cmd.append("--force-fpga")
-        if request.form.get("force_cpld"):
-            cmd.append("--force-cpld")
         return start_job(job, cmd)
 
     def job_file(job, suffix):
@@ -927,6 +926,76 @@ def create_app():
             files.delete(s, request.form.get("path", ""))
             return f"Deleted {request.form.get('path', '').rsplit('/', 1)[-1]}."
         return files_action(delete)
+
+    # --- Disks: the images a314scsi.device shows the Amiga (scsi.conf) -------------
+
+    @app.get("/disks")
+    @login_required
+    def disks_page():
+        try:
+            unit_list = disks.units()
+        except disks.DisksError as error:
+            flash(str(error), "error")
+            unit_list = [disks.Unit(n) for n in range(disks.UNITS)]
+        root = disks.images_dir()
+        return render_template("disks.html", units=unit_list, images=disks.images(unit_list),
+                               kinds=disks.KINDS, keep=disks.KEEP, root=root,
+                               free=files.free_bytes(files.Share("a314hdfs", root)) if root.is_dir() else None,
+                               installed=disks.installed(), cd=disks.cd_supported(),
+                               conf=disks.SCSI_CONF, conversion=dict(disks.CONVERSION),
+                               converting=disks.converting())
+
+    @app.post("/disks/units")
+    @login_required
+    def disks_units():
+        choices = {n: (request.form.get(f"image{n}", ""), request.form.get(f"kind{n}", "hd"))
+                   for n in range(disks.UNITS)}
+        try:
+            disks.save_units(choices)
+            flash("Saved. The Amiga sees each changed unit as a disk change within a few seconds.", "ok")
+        except (disks.DisksError, files.FilesError, OSError) as error:
+            flash(str(error), "error")
+        return redirect(url_for("disks_page"))
+
+    @app.put("/disks/upload")
+    @login_required
+    def disks_upload():
+        try:
+            saved = disks.save_image(request.args.get("name", ""), request.stream, request.content_length,
+                                     overwrite=request.args.get("overwrite") == "1")
+        except FileExistsError as error:
+            return jsonify(error=f"{error} already exists", exists=True), 409
+        except (disks.DisksError, files.FilesError, OSError) as error:
+            return jsonify(error=str(error)), 400
+        return jsonify(saved=saved)
+
+    def disks_action(action, done):
+        try:
+            action()
+            flash(done, "ok")
+        except (disks.DisksError, files.FilesError, OSError) as error:
+            flash(str(error), "error")
+        return redirect(url_for("disks_page"))
+
+    @app.post("/disks/rename")
+    @login_required
+    def disks_rename():
+        name, new = request.form.get("name", ""), request.form.get("new", "").strip()
+        return disks_action(lambda: disks.rename_image(name, new), f"Renamed {name} to {new}.")
+
+    @app.post("/disks/delete")
+    @login_required
+    def disks_delete():
+        name = request.form.get("name", "")
+        return disks_action(lambda: disks.delete_image(name), f"Deleted {name}.")
+
+    @app.post("/disks/convert")
+    @login_required
+    def disks_convert():
+        name, keep = request.form.get("name", ""), request.form.get("keep") == "1"
+        return disks_action(lambda: disks.start_convert(name, keep),
+                            f"Converting {name} to an .iso" + (", keeping the original." if keep else
+                                                                 "; the original goes when it is done."))
 
     return app
 

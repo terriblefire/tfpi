@@ -7,10 +7,17 @@ Ported from tf4060/boards/tf4060r5/flash_ram.sh and flash_bus.sh:
     fomu-flash's bit-banged SPI clock between flash commands;
   * FPGA: identify the SPI flash by JEDEC ID (fomu-flash -i), check the image
     fits, fomu-flash -u -w, read the image length back (-b) and compare;
-  * CPLD: xc3sprog -c gpiod_creator -p 0 -v, ONE attempt only. A CPLD that
-    fails erase/verify is failing; more cycles destroy it. After a failure the
-    CPLD is locked out until someone runs `tfpi-flash clear-cpld-fault`.
-  * Chips whose image is already installed are skipped (saves erase cycles).
+  * CPLD, on every flash: first find it on the JTAG chain (xc3sprog -j only
+    reads IDCODEs, so it is tried up to CHAIN_TRIES times), then read its fuses
+    back (FILE:v, verify only). If they already match the image, it isn't erased.
+    Otherwise xc3sprog -c gpiod_creator -p 0 -v, ONE attempt only. A CPLD that
+    fails erase/verify is failing; more cycles destroy it. After such a failure
+    the CPLD is locked out until someone runs `tfpi-flash clear-cpld-fault`.
+    "No JTAG Chain found" doesn't lock it: xc3sprog stops there before it erases
+    anything.
+  * The FPGA is skipped when tfpi's record says its image is installed. The
+    CPLD is always read back instead: the record can be out of date (the CPLD
+    may have been programmed another way), and a readback costs no erase cycle.
   * FPGA boot: fomu-flash -r, setgpio.sh, wait for CDONE (GPIO 23). After a
     verified FPGA write (CDONE high is also the check that the board is powered
     before any CPLD attempt), and again as the job's last step after the CPLD or
@@ -19,7 +26,7 @@ Ported from tf4060/boards/tf4060r5/flash_ram.sh and flash_bus.sh:
 CLI:
   tfpi-flash status
   tfpi-flash inspect FILE.zip
-  tfpi-flash flash FILE.zip [--force-fpga] [--force-cpld] [--name N] [--result R]
+  tfpi-flash flash FILE.zip [--force-fpga] [--name N] [--result R]
   tfpi-flash clear-cpld-fault
 """
 
@@ -42,6 +49,16 @@ from .fwimage import FirmwareError, load_release
 # also prints "Success! Verify time ..." when every fuse matched.
 CPLD_SUCCESS = re.compile(r"Success! Verify")
 CPLD_PROBLEM = re.compile(r"Mismatch at|failed|No JTAG|not found|Unknown", re.I)
+# xc3sprog -j lists each device it reads an IDCODE from, e.g.
+# "JTAG loc.:   0  IDCODE: 0x59616093  Desc:   XC95288XL Rev: F  IR length:  8".
+CPLD_CHAIN_ENTRY = re.compile(r"JTAG loc\.:\s*\d+\s+IDCODE:\s*0x[0-9a-f]{8}", re.I)
+# Printed when no IDCODE could be read; xc3sprog then stops before any erase.
+CPLD_NOT_REACHED = re.compile(r"No JTAG Chain found", re.I)
+CHAIN_TRIES = 3
+CHAIN_RETRY_SECONDS = 1.0
+NOT_REACHED = ("CPLD not found on the JTAG chain (xc3sprog: No JTAG Chain found). Nothing was "
+               "erased or written, so it is safe to flash again. If this keeps happening, check "
+               "the board is powered and the Pi's JTAG connection to it.")
 
 
 class FlashError(RuntimeError):
@@ -85,7 +102,7 @@ def flash_lock():
         yield
 
 
-def plan(release, state, force_fpga=False, force_cpld=False):
+def plan(release, state, force_fpga=False):
     """Decide which chips to flash. Returns a dict the web page shows as-is."""
     fpga_same = release.fpga_sha == state["fpga"]["sha"]
     result = {
@@ -105,11 +122,11 @@ def plan(release, state, force_fpga=False, force_cpld=False):
         result["blocked"] = ("The last CPLD flash failed (" + state["cpld"]["fault"] + "). "
                              "Check or replace the CPLD, then run "
                              "'sudo tfpi-flash clear-cpld-fault'.")
-    elif release.cpld_sha == state["cpld"]["sha"] and not force_cpld:
-        result["cpld_reason"] = "already installed"
     else:
+        # Read back on every flash; programmed only if the fuses differ.
         result["cpld"] = True
-        result["cpld_reason"] = "forced" if release.cpld_sha == state["cpld"]["sha"] else "new image"
+        result["cpld_reason"] = ("recorded as installed" if release.cpld_sha == state["cpld"]["sha"]
+                                 else "new image")
     return result
 
 
@@ -229,10 +246,58 @@ def boot_fpga():
     return ok
 
 
+def find_cpld():
+    """Read the JTAG chain with xc3sprog -j, which only reads IDCODEs and erases or
+    writes nothing, up to CHAIN_TRIES times. FlashError (no lock) if none answers."""
+    for attempt in range(1, CHAIN_TRIES + 1):
+        _, output = run([config.XC3SPROG, "-c", config.XC3SPROG_CABLE, "-j"])
+        if CPLD_CHAIN_ENTRY.search(output):
+            return
+        if attempt < CHAIN_TRIES:
+            log("CPLD: no JTAG chain found, reading it again")
+            time.sleep(CHAIN_RETRY_SECONDS)
+    raise FlashError(NOT_REACHED)
+
+
+def cpld_matches(jed):
+    """Read the CPLD's fuses back and compare them with the image (xc3sprog FILE:v
+    only verifies: nothing is erased or written). True when every fuse matches."""
+    log("CPLD: reading its fuses back to compare with this image")
+    rc, output = run([config.XC3SPROG, "-c", config.XC3SPROG_CABLE, "-p", "0", "-v", f"{jed}:v"])
+    if rc and CPLD_NOT_REACHED.search(output):
+        raise FlashError(NOT_REACHED)
+    if rc == 0 and CPLD_SUCCESS.search(output):
+        return True
+    differ = next((line.strip() for line in output.splitlines() if CPLD_PROBLEM.search(line)), None)
+    log("CPLD: " + (f"differs from this image ({differ})" if differ else
+                    f"could not be compared (xc3sprog exit status {rc})"))
+    return False
+
+
 def flash_cpld(release, state, work):
+    """Read the CPLD back and program it only if its fuses differ from the image.
+    Returns what happened, for the history."""
     jed = work / "cpld.jed"
     jed.write_bytes(release.cpld_jed)
     cpld = state["cpld"]
+    try:
+        find_cpld()
+        same = cpld_matches(jed)
+    except FlashError:
+        if release.cpld_sha != cpld["sha"]:
+            raise
+        # Not reached, but tfpi's record says it holds this image: carry on, as
+        # before the readback existed, rather than fail an FPGA update.
+        log("WARNING: CPLD not found on the JTAG chain, so it wasn't checked. tfpi's "
+            "record says it already holds this image.")
+        return "not found, not checked"
+    if same:
+        cpld.update(sha=release.cpld_sha, device=release.cpld_device, file=release.cpld_file,
+                    time=config.now(), last_result="ok", fault=None)
+        config.save_state(state)
+        log("CPLD: its fuses already match this image; not erased or programmed")
+        return "fuses match, not erased"
+    before = dict(cpld)
     cpld["flashes"] += 1
     cpld["time"] = config.now()
     cpld["sha"] = None
@@ -241,6 +306,11 @@ def flash_cpld(release, state, work):
 
     log(f"CPLD: programming {release.cpld_device or 'CPLD'} (one attempt, no retries)")
     rc, output = run([config.XC3SPROG, "-c", config.XC3SPROG_CABLE, "-p", "0", "-v", jed])
+    if rc and CPLD_NOT_REACHED.search(output):
+        # The chain went away after find_cpld(): the CPLD still holds what it had.
+        state["cpld"] = dict(before, time=config.now(), last_result="not-found")
+        config.save_state(state)
+        raise FlashError(NOT_REACHED)
     if rc or not CPLD_SUCCESS.search(output):
         problem = next((line.strip() for line in output.splitlines() if CPLD_PROBLEM.search(line)), None)
         reason = f"xc3sprog exit status {rc}" + (f" ({problem})" if problem else
@@ -254,8 +324,10 @@ def flash_cpld(release, state, work):
     cpld["device"] = release.cpld_device
     cpld["file"] = release.cpld_file
     cpld["last_result"] = "ok"
+    cpld["fault"] = None
     config.save_state(state)
     log("CPLD: programmed and verified")
+    return "flash"
 
 
 def store_release(zip_path, name, state):
@@ -278,7 +350,7 @@ def a314d_active():
                           stdin=subprocess.DEVNULL).returncode == 0
 
 
-def flash(zip_path, name=None, force_fpga=False, force_cpld=False):
+def flash(zip_path, name=None, force_fpga=False):
     name = name or Path(zip_path).name
     release = load_release(zip_path, name=name, board=config.board(), spirom=config.spirom(),
                            ntsc=config.ntsc())
@@ -289,9 +361,10 @@ def flash(zip_path, name=None, force_fpga=False, force_cpld=False):
         log("WARNING: " + warning)
     with flash_lock():
         state = config.load_state()
-        todo = plan(release, state, force_fpga, force_cpld)
+        todo = plan(release, state, force_fpga)
         log(f"FPGA: {'flash' if todo['fpga'] else 'skip'} ({todo['fpga_reason']})")
-        log(f"CPLD: {'flash' if todo['cpld'] else 'skip'} ({todo['cpld_reason']})")
+        log(f"CPLD: {'read back, program if it differs' if todo['cpld'] else 'skip'} "
+            f"({todo['cpld_reason']})")
         if todo["blocked"]:
             log("NOTE: " + todo["blocked"])
         entry = {"time": config.now(), "release": name, "seed": release.seed,
@@ -312,7 +385,7 @@ def flash(zip_path, name=None, force_fpga=False, force_cpld=False):
                 if todo["fpga"]:
                     flash_fpga(release, state, work)
                 if todo["cpld"]:
-                    flash_cpld(release, state, work)
+                    entry["cpld"] = flash_cpld(release, state, work)
             except Exception as error:
                 failure = error
             finally:
@@ -322,8 +395,8 @@ def flash(zip_path, name=None, force_fpga=False, force_cpld=False):
                 if todo["cpld"] or failure is not None:
                     booted = boot_fpga()
                     if failure is None and not booted:
-                        failure = FlashError("CPLD programmed, but the FPGA did not configure "
-                                             "afterwards (CDONE low). Power-cycle the Amiga.")
+                        failure = FlashError("After the CPLD step the FPGA did not configure "
+                                             "(CDONE low). Power-cycle the Amiga.")
                 if a314d_was_active:
                     log("a314d: started again")
                     run([config.SYSTEMCTL, "start", config.A314_SERVICE])
@@ -354,7 +427,6 @@ def main(argv=None):
     run_flash.add_argument("zip", type=Path)
     run_flash.add_argument("--name")
     run_flash.add_argument("--force-fpga", action="store_true")
-    run_flash.add_argument("--force-cpld", action="store_true")
     run_flash.add_argument("--result", type=Path, help="write the outcome here as JSON")
     sub.add_parser("clear-cpld-fault")
     args = parser.parse_args(argv)
@@ -366,7 +438,8 @@ def main(argv=None):
         state = config.load_state()
         state["cpld"]["fault"] = None
         config.save_state(state)
-        print("CPLD fault cleared. The next flash will program the CPLD once.")
+        print("CPLD fault cleared. The next flash reads the CPLD back and, if it differs, "
+              "programs it once.")
         return 0
     if args.cmd == "inspect":
         try:
@@ -381,7 +454,7 @@ def main(argv=None):
 
     outcome = {"ok": False, "result": None}
     try:
-        entry = flash(args.zip, args.name, args.force_fpga, args.force_cpld)
+        entry = flash(args.zip, args.name, args.force_fpga)
         outcome = {"ok": True, "result": entry["result"]}
     except (FirmwareError, FlashError) as error:
         log(f"FAILED: {error}")
