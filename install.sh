@@ -277,6 +277,12 @@ systemctl restart tfpi-web.service
 systemctl enable tfpi-serial.service           # the Serial Port page's WebSocket
 systemctl restart tfpi-serial.service
 
+# --- Disk images for a314scsi.device (Disks tab) -----------------------------
+# The Disks tab keeps hard disk (hdf) and CD (iso) images in ~/a314hdfs of the
+# Pi user, where a314's README puts them; scsi.py runs as that user.
+a314_home=$(getent passwd "$A314_USER" | cut -d: -f6)
+[ -z "$a314_home" ] || install -d -o "$A314_USER" -g "$(id -gn "$A314_USER")" "$a314_home/a314hdfs"
+
 # --- WiFi power save off -----------------------------------------------------
 # With power save on, the Pi's WiFi holds back what is sent to the Pi for up
 # to a few hundred ms after a quiet spell: the pages lag, and so do the keys
