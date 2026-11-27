@@ -23,7 +23,7 @@ from werkzeug.utils import secure_filename
 
 from . import __version__, config
 from . import compat, custom, diag, disks, feed, files, pi, sdk, serial, serialws, update
-from .flasher import plan
+from .flasher import failed_release, forget_cpld_failure, plan
 from .fwimage import FirmwareError, load_release
 
 TOKEN_CHARS = set("0123456789abcdef")
@@ -588,6 +588,27 @@ def create_app():
         if request.form.get("force_fpga"):
             cmd.append("--force-fpga")
         return start_job(job, cmd)
+
+    @app.post("/cpld/retry")
+    @login_required
+    def cpld_retry():
+        """After a failed CPLD flash: flash the same release again."""
+        if not config.load_state()["cpld"].get("fault"):
+            flash("Nothing to retry: the last CPLD flash didn't fail.", "error")
+            return redirect(url_for("firmware_page"))
+        if busy_reason():
+            flash(busy_reason(), "error")
+            return redirect(url_for("firmware_page"))
+        path = failed_release()
+        if path is None:
+            forget_cpld_failure()
+            flash("The release whose CPLD flash failed isn't kept any more: flash a release "
+                  "from this page instead.", "error")
+            return redirect(url_for("firmware_page"))
+        config.JOB_DIR.mkdir(parents=True, exist_ok=True)
+        job = time.strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(3)
+        return start_job(job, [sys.executable, "-m", "tfpi.flasher", "flash", str(path), "--name", path.name,
+                               "--result", str(config.JOB_DIR / f"{job}.json")])
 
     def job_file(job, suffix):
         if not job.replace("-", "").isalnum():

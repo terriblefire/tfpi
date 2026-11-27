@@ -1,3 +1,4 @@
+import json
 import os
 
 from helpers import Sandbox, full_image, jed, make_zip
@@ -79,20 +80,38 @@ class FlasherTests(Sandbox):
         self.assertEqual(config.load_state()["fpga"]["last_result"], "cdone-low")
         self.assertEqual(self.cpld_flashes(), 0)
 
-    def test_cpld_failure_locks_out_cpld(self):
+    def test_cpld_failure_is_reported_not_locked(self):
         os.environ["FAKE_XC3_FAIL"] = "1"
-        self.assertEqual(self.flash(self.release()), 1)
+        self.assertEqual(self.flash(self.release(), "--result", self.tmp / "res.json"), 1)
         state = config.load_state()
         self.assertIn("Mismatch at fuse", state["cpld"]["fault"])
-        self.assertEqual(self.cpld_flashes(), 1)                          # exactly one attempt
+        outcome = json.loads((self.tmp / "res.json").read_text())
+        self.assertEqual(outcome["result"],
+                         "CPLD programming failed: xc3sprog exit status 1 (Mismatch at fuse  12345: 0 vs 1).")
+        self.assertTrue(outcome["cpld_failed"])                           # the job page offers Retry
+        self.assertEqual(state["cpld"]["fault_release"], "r1.zip")
+        self.assertTrue((config.FIRMWARE_DIR / "r1.zip").exists())        # kept for Retry
+        self.assertEqual(self.cpld_flashes(), 1)                          # one attempt per flash
 
+        # The next flash goes ahead, with a note on the review page.
+        release = flasher.load_release(self.release("b.zip", cpld=1), board="tf4060r5")
+        todo = flasher.plan(release, config.load_state())
+        self.assertTrue(todo["cpld"])
+        self.assertIn("The last CPLD flash failed", todo["note"])
         del os.environ["FAKE_XC3_FAIL"]
         self.assertEqual(self.flash(self.release("b.zip", cpld=1)), 0)
-        self.assertEqual(self.cpld_flashes(), 1)                          # still locked: not even read
-        self.assertEqual(config.load_state()["history"][0]["result"], "nothing to do")
-        self.assertEqual(flasher.main(["clear-cpld-fault"]), 0)
-        self.assertEqual(self.flash(self.release("b.zip", cpld=1)), 0)
         self.assertEqual(self.cpld_flashes(), 2)
+        state = config.load_state()
+        self.assertIsNone(state["cpld"]["fault"])                         # a good flash clears it
+        self.assertIsNone(flasher.plan(release, state)["note"])
+
+    def test_retry_finds_the_failed_release(self):
+        os.environ["FAKE_XC3_FAIL"] = "1"
+        self.assertEqual(self.flash(self.release()), 1)
+        self.assertEqual(flasher.failed_release(), config.FIRMWARE_DIR / "r1.zip")
+        self.assertEqual(flasher.main(["clear-cpld-fault"]), 0)          # forgets the failure
+        self.assertIsNone(config.load_state()["cpld"]["fault"])
+        self.assertIsNone(flasher.failed_release())
 
     def test_no_jtag_chain_does_not_lock_the_cpld(self):
         os.environ["FAKE_XC3_NOCHAIN"] = "3"                              # every chain read fails

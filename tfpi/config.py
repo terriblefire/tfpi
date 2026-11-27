@@ -96,7 +96,7 @@ def empty_state():
         "seed": None,
         "fpga": {"sha": None, "flashes": 0, "last_result": None, "time": None},
         "cpld": {"sha": None, "device": None, "flashes": 0, "last_result": None,
-                 "time": None, "fault": None, "file": None},
+                 "time": None, "fault": None, "fault_release": None, "file": None},
         "history": [],
     }
 

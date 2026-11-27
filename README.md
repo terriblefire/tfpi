@@ -108,9 +108,9 @@ set in `/etc/tfpi/tfpi.conf` (`BOARD=tf4060r5`).
   match, it isn't erased or programmed. If the CPLD isn't found but tfpi's record
   says it already holds this image, the flash carries on with a warning.
 - The CPLD is programmed **once** per flash, with verify. If erase or verify
-  fails, the CPLD is locked out on this Pi: a CPLD that fails verify is failing,
-  and more erase cycles can destroy it. Check or replace the chip, then run
-  `sudo tfpi-flash clear-cpld-fault`.
+  fails, the pages say so and offer **Retry**, which flashes the same release
+  again; nothing is locked. If it keeps failing, ask on Discord before trying
+  many more times: every try erases the chip again.
 - Every flash ends by resetting the FPGA (`fomu-flash -r`, then CDONE), also
   after a CPLD-only flash or a failed one, so the FPGA is never left held in reset.
 - Only one flash runs at a time.
