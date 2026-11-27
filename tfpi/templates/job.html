@@ -9,6 +9,7 @@
 <pre class="log" id="log"></pre>
 {% if is_diag and not job.startswith("diagrecover-") %}<form id="abort" method="post" action="/diag/abort/{{ job }}" onsubmit="return confirm('Stop the test? The machine is still restored to its original state.')"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary">Abort test</button></form>{% endif %}
 <p id="result" hidden></p>
+{% if is_update %}<div id="reboot" hidden><p>{% with big = true %}{% include "_reboot_form.html" %}{% endwith %}</p></div>{% endif %}
 <p><a href="{{ '/diag' if is_diag else '/' }}">Back to {{ "Diagnostics" if is_diag else "status" }}</a></p></div>
 <script>
 let offset = 0;
@@ -16,6 +17,8 @@ const logEl = document.getElementById("log"), statusEl = document.getElementById
 function finished(d) {
   const abortEl = document.getElementById("abort");
   if (abortEl) abortEl.hidden = true;
+  const rebootEl = document.getElementById("reboot");
+  if (rebootEl && d.result && d.result.reboot) rebootEl.hidden = false;
   if (d.result && d.result.kind && d.result.kind.startsWith("diag") && d.result.job) {
     const r = document.getElementById("result");
     r.hidden = false;

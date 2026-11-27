@@ -70,6 +70,7 @@ fieldset { border:1px solid var(--line); border-radius:6px; margin:0 0 12px; } l
 </header>
 <main>
 {% if compat %}<div class="banner-bad"><b>Incompatible versions.</b> {{ compat }}</div>{% endif %}
+{% if reboot_needed and request.endpoint != "pi_rebooting" %}<div class="warning"><p><b>Reboot the Pi</b> to finish: {{ reboot_needed.why }}.</p><div style="margin-top:8px">{% with big = true %}{% include "_reboot_form.html" %}{% endwith %}</div></div>{% endif %}
 {% for category, message in get_flashed_messages(with_categories=true) %}<div class="flash {{ category }}">{{ message }}</div>{% endfor %}
 {% block body %}{% endblock %}
 </main>

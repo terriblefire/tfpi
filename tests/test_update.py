@@ -6,7 +6,7 @@ import sys
 import time
 
 from helpers import Sandbox
-from tfpi import config, update
+from tfpi import config, pi, update
 
 OLD, NEW = "a" * 40, "b" * 40
 PINS = {"FOMU_FLASH_REF": "f1", "XC3SPROG_REF": "x2", "XC3SPROG_REF_GPIOD1": "x1", "A314_REF": "a1"}
@@ -22,6 +22,9 @@ class UpdateBase(Sandbox):
         self.saved = {k: getattr(update, k) for k in ("A314D", "BOOT_FILES", "UPDATE_CMD", "SYSTEMD_RUN",
                                                       "remote_head", "remote_pins", "remote_changes")}
         update.A314D, update.BOOT_FILES = self.a314d, [self.boot]
+        self.saved_boot_id = pi.BOOT_ID
+        pi.BOOT_ID = self.tmp / "boot_id"
+        pi.BOOT_ID.write_text("1111-aaaa\n")
         update.SYSTEMD_RUN = str(self.tmp / "no-systemd-run")
         update.remote_head = lambda: NEW
         update.remote_pins = lambda commit: dict(PINS)
@@ -31,6 +34,7 @@ class UpdateBase(Sandbox):
     def tearDown(self):
         for key, value in self.saved.items():
             setattr(update, key, value)
+        pi.BOOT_ID = self.saved_boot_id
         super().tearDown()
 
     def installed(self, a314="a1", xc3="x1", a314d_sha=None):
@@ -76,7 +80,32 @@ class UpdateTests(UpdateBase):
         data = json.loads(result.read_text())
         self.assertTrue(data["ok"])
         self.assertTrue(data["reboot"])
+        self.assertEqual(data["result"], "updated; reboot the Pi: the software update changed config.txt")
+        self.assertEqual(pi.reboot_needed()["why"], "the software update changed config.txt")
         self.assertIn("installing", log.read_text())
+
+    def test_run_without_boot_changes_needs_no_reboot(self):
+        script = self.tmp / "tfpi-update"
+        script.write_text(f"#!{sys.executable}\nprint('installing')\n")
+        script.chmod(0o755)
+        update.UPDATE_CMD = str(script)
+        self.assertEqual(update.run(self.tmp / "u.log", self.tmp / "u.json"), 0)
+        data = json.loads((self.tmp / "u.json").read_text())
+        self.assertFalse(data["reboot"])
+        self.assertEqual(data["result"], "updated; no reboot needed")
+        self.assertIsNone(pi.reboot_needed())
+
+    def test_run_reports_the_installers_reboot(self):
+        # the installer marked a reboot (a314d didn't start) without a boot file change
+        script = self.tmp / "tfpi-update"
+        script.write_text(f"#!{sys.executable}\nprint('installing')\n")
+        script.chmod(0o755)
+        update.UPDATE_CMD = str(script)
+        pi.mark_reboot("a314d did not start after the a314 install")
+        self.assertEqual(update.run(self.tmp / "u.log", self.tmp / "u.json"), 0)
+        data = json.loads((self.tmp / "u.json").read_text())
+        self.assertTrue(data["reboot"])
+        self.assertEqual(data["result"], "updated; reboot the Pi: a314d did not start after the a314 install")
 
     def test_run_refuses_during_flash(self):
         config.STATE_DIR.mkdir(parents=True, exist_ok=True)

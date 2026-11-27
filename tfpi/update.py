@@ -22,7 +22,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-from . import config
+from . import config, pi
 
 REPO = os.environ.get("TFPI_UPDATE_REPO", "https://github.com/terriblefire/tfpi")
 BRANCH = "main"
@@ -246,11 +246,15 @@ def run(log, result):
         except OSError as error:
             out.write(f"{error}\n")
             rc = 127
-        reboot = boot_before != [sha256(p) for p in BOOT_FILES]
+        changed = [p.name for p, before in zip(BOOT_FILES, boot_before) if sha256(p) != before]
+        if changed:
+            pi.mark_reboot(f"the software update changed {' and '.join(changed)}")
+        pending = pi.reboot_needed()    # this update's, the installer's or an earlier one's
+        why = pending["why"] if pending else f"the software update changed {' and '.join(changed)}"
+        reboot = bool(changed or pending)
         os.sync()
         if rc == 0:
-            summary = "updated" + ("; boot files (config.txt, cmdline.txt or the a314 SPI overlay) changed, reboot the Pi (and the Amiga) to use them"
-                                   if reboot else "")
+            summary = "updated; " + (f"reboot the Pi: {why}" if reboot else "no reboot needed")
         else:
             summary = f"tfpi-update exited with status {rc}; the log above says where it stopped"
         config.write_json(Path(result), {"ok": rc == 0, "result": summary, "kind": "update",

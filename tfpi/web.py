@@ -22,7 +22,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 
 from . import __version__, config
-from . import compat, custom, diag, disks, feed, files, sdk, serial, serialws, update
+from . import compat, custom, diag, disks, feed, files, pi, sdk, serial, serialws, update
 from .flasher import plan
 from .fwimage import FirmwareError, load_release
 
@@ -159,6 +159,7 @@ def create_app():
                 extra["compat"] = compat.banner()
             except Exception:           # never let the check take a page down
                 extra["compat"] = None
+            extra["reboot_needed"] = pi.reboot_needed()
         return extra
 
     @app.errorhandler(413)
@@ -328,6 +329,34 @@ def create_app():
         (config.JOB_DIR / "current").write_text(job)
         prune_jobs()
         return redirect(url_for("job_page", job=job))
+
+    # --- reboot the Pi ----------------------------------------------------------------
+
+    @app.post("/pi/reboot")
+    @login_required
+    def pi_reboot():
+        reason = busy_reason() or ("An image is being converted to .iso on the Disks tab. "
+                                   "Reboot when it has finished." if disks.converting() else None)
+        if reason:
+            flash(reason, "error")
+            return redirect(url_for("index"))
+        before = pi.boot_id()
+        pi.reboot()
+        return redirect(url_for("pi_rebooting", boot=before))
+
+    @app.get("/pi/rebooting")
+    @login_required
+    def pi_rebooting():
+        boot = request.args.get("boot", "")
+        if not set(boot) <= TOKEN_CHARS | {"-"}:
+            abort(400)
+        return render_template("rebooting.html", boot=boot)
+
+    @app.get("/pi/status")
+    @login_required
+    def pi_status():
+        """For the rebooting page: a new boot_id means the Pi is back."""
+        return jsonify(boot_id=pi.boot_id(), error=pi.reboot_error())
 
     # --- published firmware (ghcr.io) ------------------------------------------------
 
