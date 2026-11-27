@@ -76,6 +76,67 @@ class WebTests(Sandbox):
         r = self.client.post("/settings/ntsc", data={"csrf": self.csrf("/"), "next": "//evil.example/"})
         self.assertTrue(r.headers["Location"].endswith("/firmware"))
 
+    def wait_job(self, location):
+        job = location.rsplit("/", 1)[1]
+        log, offset = "", 0
+        for _ in range(100):
+            reply = self.client.get(f"/job/{job}/log?offset={offset}").get_json()
+            log, offset = log + reply["text"], reply["offset"]
+            if reply["status"] == "done":
+                return reply, log
+            time.sleep(0.2)
+        self.fail(log)
+
+    def fail_cpld(self, release):
+        state = config.load_state()
+        state["cpld"].update(fault="2026-11-27 12:00:00: xc3sprog exit status 1 (Mismatch at fuse)",
+                             fault_release=release, last_result="failed")
+        config.save_state(state)
+
+    def test_cpld_retry_flashes_the_failed_release_again(self):
+        self.login()
+        config.FIRMWARE_DIR.mkdir(parents=True, exist_ok=True)
+        make_zip(config.FIRMWARE_DIR / "fw.zip", {"tf4060r5_ram.bin": full_image(),
+                                                  "tf4060r5_bus_top.jed": jed(), "seed.txt": "7"})
+        self.fail_cpld("fw.zip")
+        self.assertIn('action="/cpld/retry"', self.client.get("/firmware").get_data(as_text=True))
+        home = self.client.get("/").get_data(as_text=True)
+        self.assertIn("The last BUS CPLD flash failed.", home)
+        self.assertIn('action="/cpld/retry"', home)
+        started = self.client.post("/cpld/retry", data={"csrf": self.csrf("/")})
+        self.assertIn("/job/", started.headers["Location"])
+        reply, log = self.wait_job(started.headers["Location"])
+        self.assertTrue(reply["result"]["ok"], log)
+        self.assertIn("release fw.zip", log)
+        self.assertIn("NOTE: The last CPLD flash failed", log)
+        self.assertIn("CPLD: programmed and verified", log)
+        self.assertIsNone(config.load_state()["cpld"]["fault"])
+        self.assertNotIn('action="/cpld/retry"', self.client.get("/firmware").get_data(as_text=True))
+
+    def test_cpld_retry_without_the_zip(self):
+        self.login()
+        self.fail_cpld("gone.zip")
+        page = self.client.post("/cpld/retry", data={"csrf": self.csrf("/")},
+                                follow_redirects=True).get_data(as_text=True)
+        self.assertIn("isn&#39;t kept any more", page)
+        self.assertIsNone(config.load_state()["cpld"]["fault"])
+
+    def test_cpld_retry_when_nothing_failed(self):
+        self.login()
+        page = self.client.post("/cpld/retry", data={"csrf": self.csrf("/")},
+                                follow_redirects=True).get_data(as_text=True)
+        self.assertIn("Nothing to retry", page)
+
+    def test_review_notes_a_failed_cpld_flash_but_allows_it(self):
+        self.login()
+        self.fail_cpld("old.zip")
+        review = self.upload({"tf4060r5_ram.bin": full_image(), "tf4060r5_bus_top.jed": jed(),
+                              "seed.txt": "7"}).headers["Location"]
+        page = self.client.get(review).get_data(as_text=True)
+        self.assertIn('<p class="warn">The last CPLD flash failed', page)
+        self.assertIn("ask on Discord before trying many more times", page)
+        self.assertIn("Flash now", page)
+
     def test_prune_jobs_keeps_the_newest_by_time(self):
         # 25 older update- logs, then a flash job (named by date, which sorts first)
         from tfpi.web import prune_jobs

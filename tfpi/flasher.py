@@ -10,10 +10,10 @@ Ported from tf4060/boards/tf4060r5/flash_ram.sh and flash_bus.sh:
   * CPLD, on every flash: first find it on the JTAG chain (xc3sprog -j only
     reads IDCODEs, so it is tried up to CHAIN_TRIES times), then read its fuses
     back (FILE:v, verify only). If they already match the image, it isn't erased.
-    Otherwise xc3sprog -c gpiod_creator -p 0 -v, ONE attempt only. A CPLD that
-    fails erase/verify is failing; more cycles destroy it. After such a failure
-    the CPLD is locked out until someone runs `tfpi-flash clear-cpld-fault`.
-    "No JTAG Chain found" doesn't lock it: xc3sprog stops there before it erases
+    Otherwise xc3sprog -c gpiod_creator -p 0 -v, one attempt per flash. A
+    failure is recorded: the pages show it with Retry (the same release again),
+    and the review page notes it before the next flash. Nothing is locked.
+    "No JTAG Chain found" isn't recorded: xc3sprog stops there before it erases
     anything.
   * The FPGA is skipped when tfpi's record says its image is installed. The
     CPLD is always read back instead: the record can be out of date (the CPLD
@@ -65,6 +65,10 @@ class FlashError(RuntimeError):
     pass
 
 
+class CpldFailed(FlashError):
+    """CPLD erase/program/verify failed (the job page offers Retry)."""
+
+
 def log(message):
     print(f"[{time.strftime('%H:%M:%S')}] {message}", flush=True)
 
@@ -111,22 +115,20 @@ def plan(release, state, force_fpga=False):
                         "already installed" if fpga_same else "new image"),
         "cpld": False,
         "cpld_reason": "",
-        "blocked": None,
+        "note": None,
     }
     if release.cpld_jed is None:
         result["cpld_reason"] = ("no CPLD file for this machine in this zip"
                                  if any(m.lower().endswith(".jed") for m in release.members)
                                  else "no CPLD file in this zip")
-    elif state["cpld"].get("fault"):
-        result["cpld_reason"] = "CPLD locked after a failed flash"
-        result["blocked"] = ("The last CPLD flash failed (" + state["cpld"]["fault"] + "). "
-                             "Check or replace the CPLD, then run "
-                             "'sudo tfpi-flash clear-cpld-fault'.")
     else:
         # Read back on every flash; programmed only if the fuses differ.
         result["cpld"] = True
         result["cpld_reason"] = ("recorded as installed" if release.cpld_sha == state["cpld"]["sha"]
                                  else "new image")
+        if state["cpld"].get("fault"):
+            result["note"] = ("The last CPLD flash failed (" + state["cpld"]["fault"] + "). If it "
+                              "keeps failing, ask on Discord before trying many more times.")
     return result
 
 
@@ -317,9 +319,9 @@ def flash_cpld(release, state, work):
                                                   "" if rc else ", no verify success line")
         cpld["last_result"] = "failed"
         cpld["fault"] = f"{config.now()}: {reason}"
+        cpld["fault_release"] = release.name           # what Retry flashes again
         config.save_state(state)
-        raise FlashError(f"CPLD programming failed: {reason}. DO NOT retry: a CPLD that "
-                         "fails erase/verify is failing and more cycles can destroy it.")
+        raise CpldFailed(f"CPLD programming failed: {reason}.")
     cpld["sha"] = release.cpld_sha
     cpld["device"] = release.cpld_device
     cpld["file"] = release.cpld_file
@@ -345,6 +347,21 @@ def store_release(zip_path, name, state):
             old.unlink()
 
 
+def failed_release():
+    """The stored zip of the release whose CPLD flash failed last (for Retry),
+    or None if none failed or it isn't kept any more."""
+    name = config.load_state()["cpld"].get("fault_release")
+    path = config.FIRMWARE_DIR / Path(name).name if name else None
+    return path if path and path.is_file() else None
+
+
+def forget_cpld_failure():
+    state = config.load_state()
+    state["cpld"]["fault"] = None
+    state["cpld"]["fault_release"] = None
+    config.save_state(state)
+
+
 def a314d_active():
     return subprocess.run([config.SYSTEMCTL, "is-active", "--quiet", config.A314_SERVICE],
                           stdin=subprocess.DEVNULL).returncode == 0
@@ -365,8 +382,8 @@ def flash(zip_path, name=None, force_fpga=False):
         log(f"FPGA: {'flash' if todo['fpga'] else 'skip'} ({todo['fpga_reason']})")
         log(f"CPLD: {'read back, program if it differs' if todo['cpld'] else 'skip'} "
             f"({todo['cpld_reason']})")
-        if todo["blocked"]:
-            log("NOTE: " + todo["blocked"])
+        if todo["note"]:
+            log("NOTE: " + todo["note"])
         entry = {"time": config.now(), "release": name, "seed": release.seed,
                  "fpga": "flash" if todo["fpga"] else "skip",
                  "cpld": "flash" if todo["cpld"] else "skip", "result": None}
@@ -407,6 +424,11 @@ def flash(zip_path, name=None, force_fpga=False):
                     state["seed"] = release.seed
                 config.save_state(state)
             if failure is not None:
+                if isinstance(failure, CpldFailed):
+                    try:
+                        store_release(zip_path, name, state)     # kept for Retry
+                    except OSError as error:
+                        log(f"WARNING: couldn't keep {name} for Retry: {error}")
                 raise failure
         if entry["result"] == "nothing to do":
             state["history"] = ([entry] + state["history"])[:50]
@@ -435,11 +457,8 @@ def main(argv=None):
         print(json.dumps(config.load_state(), indent=2))
         return 0
     if args.cmd == "clear-cpld-fault":
-        state = config.load_state()
-        state["cpld"]["fault"] = None
-        config.save_state(state)
-        print("CPLD fault cleared. The next flash reads the CPLD back and, if it differs, "
-              "programs it once.")
+        forget_cpld_failure()
+        print("The record of the last failed CPLD flash is cleared.")
         return 0
     if args.cmd == "inspect":
         try:
@@ -458,7 +477,7 @@ def main(argv=None):
         outcome = {"ok": True, "result": entry["result"]}
     except (FirmwareError, FlashError) as error:
         log(f"FAILED: {error}")
-        outcome = {"ok": False, "result": str(error)}
+        outcome = {"ok": False, "result": str(error), "cpld_failed": isinstance(error, CpldFailed)}
     except Exception as error:  # keep a result file even on a bug
         log(f"FAILED (internal error): {error!r}")
         outcome = {"ok": False, "result": f"internal error: {error!r}"}

@@ -13,7 +13,7 @@
 <div class="card status {{ 'attention' if fw.available or state.cpld.fault else '' }}">
 <h2><a href="/firmware">Firmware</a></h2>
 <p>Installed: {% if fw.installed %}{{ m.buildname(fw.installed) }}{% elif state.release %}<span class="mono">{{ state.release }}</span>{% else %}<span class="muted">unknown (nothing flashed through this page yet)</span>{% endif %}
-{% if state.cpld.fault %}<br><span class="bad">BUS CPLD locked after a failed flash: see the Firmware tab.</span>{% endif %}</p>
+{% if state.cpld.fault %}<br><span class="bad">The last BUS CPLD flash failed.</span> {% include "_cpld_retry_form.html" %}{% endif %}</p>
 {% if fw.available %}
 <p><b>Update available:</b> {{ m.buildname(fw.latest) }}{% if fw.latest.channel == "dev" %} <span class="warn">not a tested release</span>{% endif %}
 {% if fw.latest.summary %}<br><span class="muted">{{ fw.latest.summary }}</span>{% endif %}</p>

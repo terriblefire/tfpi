@@ -1,0 +1,1 @@
+<form class="inline" method="post" action="/cpld/retry" onsubmit="return confirm({{ ('Flash ' ~ (state.cpld.fault_release or 'the release') ~ ' again? The CPLD is read back and programmed once more.') | tojson | forceescape }})"><input type="hidden" name="csrf" value="{{ csrf }}"><button>Retry</button></form>

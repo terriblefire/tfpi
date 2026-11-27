@@ -40,7 +40,7 @@
   {% if state.fpga.last_result and state.fpga.last_result != "ok" %}<br><span class="bad">last result: {{ state.fpga.last_result }}</span>{% endif %}</td></tr>
 <tr><th>BUS CPLD</th><td>{% if state.cpld.file %}<span class="mono">{{ state.cpld.file }}</span><br>{% endif %}{% if state.cpld.sha %}<span class="mono">{{ state.cpld.sha[:16] }}</span> {{ state.cpld.device or "" }}{% else %}<span class="muted">unknown</span>{% endif %}
   <span class="muted">· {{ state.cpld.flashes }} flash{{ "" if state.cpld.flashes == 1 else "es" }}{% if state.cpld.time %} · last {{ state.cpld.time }}{% endif %}</span>
-  {% if state.cpld.fault %}<br><span class="bad">LOCKED: {{ state.cpld.fault }}</span>{% endif %}
+  {% if state.cpld.fault %}<br><span class="bad">Last flash failed: {{ state.cpld.fault }}</span> {% include "_cpld_retry_form.html" %}{% endif %}
   {% if state.cpld.sha and state.cpld.file and state.cpld.file.endswith("_bus_ntsc.jed") != ntsc %}<br><span class="warn">This is the {{ "NTSC" if state.cpld.file.endswith("_bus_ntsc.jed") else "standard" }} BUS CPLD, but the NTSC setting below is {{ "on" if ntsc else "off" }}: flash a release again to change it.</span>{% endif %}</td></tr>
 <tr><th>a314d</th><td class="{{ 'ok' if a314d == 'active' else 'warn' }}">{{ a314d }}</td></tr>
 </table>

@@ -13,7 +13,7 @@
 {{ m.ntsc_switch(ntsc, "/review/" ~ token) }}
 {% for w in release.warnings %}<p class="warn">{{ w }}</p>{% endfor %}
 {% if not release.cpld_sha and not release.jed_files %}<p class="warn">This zip has no CPLD (.jed) file, so only the FPGA can be flashed.</p>{% endif %}
-{% if plan.blocked %}<p class="bad">{{ plan.blocked }}</p>{% endif %}
+{% if plan.note %}<p class="warn">{{ plan.note }}</p>{% endif %}
 </div>
 
 <div class="card">
