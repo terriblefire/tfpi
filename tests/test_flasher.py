@@ -84,10 +84,10 @@ class FlasherTests(Sandbox):
         os.environ["FAKE_XC3_FAIL"] = "1"
         self.assertEqual(self.flash(self.release(), "--result", self.tmp / "res.json"), 1)
         state = config.load_state()
-        self.assertIn("Mismatch at fuse", state["cpld"]["fault"])
+        self.assertIn("program failed: Programming failed at sector 5", state["cpld"]["fault"])
         outcome = json.loads((self.tmp / "res.json").read_text())
-        self.assertEqual(outcome["result"],
-                         "CPLD programming failed: xc3sprog exit status 1 (Mismatch at fuse  12345: 0 vs 1).")
+        self.assertEqual(outcome["result"], "CPLD program failed: Programming failed at sector 5 (status 03) "
+                                            "(xc3sprog exit status 1).")
         self.assertTrue(outcome["cpld_failed"])                           # the job page offers Retry
         self.assertEqual(state["cpld"]["fault_release"], "r1.zip")
         self.assertTrue((config.FIRMWARE_DIR / "r1.zip").exists())        # kept for Retry
@@ -104,6 +104,40 @@ class FlasherTests(Sandbox):
         state = config.load_state()
         self.assertIsNone(state["cpld"]["fault"])                         # a good flash clears it
         self.assertIsNone(flasher.plan(release, state)["note"])
+
+    def test_cpld_steps_each_checked(self):
+        self.assertEqual(self.flash(self.release()), 0)
+        self.assertEqual(self.calls()[-5:-2], ["xc3sprog -e", "xc3sprog :p", "xc3sprog :v"])
+        self.assertEqual(config.load_state()["cpld"]["last_result"], "ok")
+
+    def test_erase_failure_stops_before_programming(self):
+        os.environ["FAKE_XC3_ERASE_FAIL"] = "1"
+        self.assertEqual(self.flash(self.release(), "--result", self.tmp / "res.json"), 1)
+        outcome = json.loads((self.tmp / "res.json").read_text())
+        self.assertEqual(outcome["result"], "CPLD erase failed: Erase failed (status 03) (xc3sprog exit status 1).")
+        self.assertTrue(outcome["cpld_failed"])
+        self.assertNotIn("xc3sprog :p", self.calls())
+        self.assertEqual(config.load_state()["cpld"]["last_result"], "erase-failed")
+
+    def test_verify_failure_is_reported(self):
+        os.environ["FAKE_XC3_VERIFY_FAIL"] = "1"
+        self.assertEqual(self.flash(self.release(), "--result", self.tmp / "res.json"), 1)
+        outcome = json.loads((self.tmp / "res.json").read_text())
+        self.assertEqual(outcome["result"], "CPLD verify failed: Mismatch at fuse      0: 1 vs 0 (xc3sprog exit status 1).")
+        self.assertEqual(config.load_state()["cpld"]["last_result"], "verify-failed")
+        self.assertIsNone(config.load_state()["cpld"]["sha"])
+
+    def test_xc3sprog_without_steps_flashes_in_one_run(self):
+        # No FILE:p (an xc3sprog the installer couldn't patch): the one-run write, not a dead end.
+        os.environ["FAKE_XC3_OLD"] = "1"
+        self.assertEqual(self.flash(self.release(), "--result", self.tmp / "res.json"), 0)
+        self.assertEqual(self.calls()[-3:], ["xc3sprog", "fomu-flash -r", "setgpio"])
+        self.assertNotIn("xc3sprog -e", self.calls())
+        self.assertEqual(config.load_state()["cpld"]["last_result"], "ok")
+        os.environ["FAKE_XC3_FAIL"] = "1"
+        self.assertEqual(self.flash(self.release("b.zip", cpld=1), "--result", self.tmp / "res.json"), 1)
+        self.assertEqual(json.loads((self.tmp / "res.json").read_text())["result"],
+                         "CPLD write failed: Mismatch at fuse  12345: 0 vs 1 (xc3sprog exit status 1).")
 
     def test_retry_finds_the_failed_release(self):
         os.environ["FAKE_XC3_FAIL"] = "1"
@@ -136,6 +170,7 @@ class FlasherTests(Sandbox):
     def test_chain_lost_while_programming_does_not_lock_the_cpld(self):
         self.assertEqual(self.flash(self.release("a.zip")), 0)
         installed = config.load_state()["cpld"]["sha"]
+        (self.tmp / "calls.log").unlink()
         os.environ["FAKE_XC3_PROG_NOCHAIN"] = "1"
         self.assertEqual(self.flash(self.release("b.zip", cpld=1)), 1)
         cpld = config.load_state()["cpld"]
@@ -143,9 +178,10 @@ class FlasherTests(Sandbox):
         self.assertEqual(cpld["sha"], installed)                          # the CPLD still holds a.zip's
         self.assertEqual(cpld["last_result"], "not-found")
 
+        self.assertNotIn("xc3sprog :p", self.calls())                    # stopped at the erase step
         del os.environ["FAKE_XC3_PROG_NOCHAIN"]
         self.assertEqual(self.flash(self.release("b.zip", cpld=1)), 0)
-        self.assertEqual(self.cpld_flashes(), 3)
+        self.assertEqual(self.cpld_flashes(), 2)                          # a.zip, then b.zip
 
     def test_old_no_chain_lock_is_ignored(self):
         state = config.load_state()
@@ -238,13 +274,15 @@ class FlasherTests(Sandbox):
         # FPGA written, booted (the board-powered check), CPLD, then booted again.
         self.assertEqual(self.calls(), ["fomu-flash -q -u -w " + str(self.tmp / "state" / "work" / "fpga.bin"),
                                         "fomu-flash -r", "setgpio", "xc3sprog -j", "xc3sprog :v",
-                                        "xc3sprog", "fomu-flash -r", "setgpio"])
+                                        "xc3sprog -e", "xc3sprog :p", "xc3sprog :v",
+                                        "fomu-flash -r", "setgpio"])
 
     def test_cpld_only_flash_resets_fpga_after(self):
         self.flash(self.release("a.zip"))
         (self.tmp / "calls.log").unlink()
         self.assertEqual(self.flash(self.release("b.zip", cpld=1)), 0)
-        self.assertEqual(self.calls(), ["xc3sprog -j", "xc3sprog :v", "xc3sprog", "fomu-flash -r", "setgpio"])
+        self.assertEqual(self.calls(), ["xc3sprog -j", "xc3sprog :v", "xc3sprog -e", "xc3sprog :p",
+                                        "xc3sprog :v", "fomu-flash -r", "setgpio"])
 
     def test_failed_fpga_write_still_releases_the_fpga(self):
         os.environ["FAKE_FOMU_CORRUPT"] = "1"
@@ -255,7 +293,7 @@ class FlasherTests(Sandbox):
     def test_cpld_failure_still_resets_fpga(self):
         os.environ["FAKE_XC3_FAIL"] = "1"
         self.assertEqual(self.flash(self.release()), 1)
-        self.assertEqual(self.calls()[-3:], ["xc3sprog", "fomu-flash -r", "setgpio"])
+        self.assertEqual(self.calls()[-3:], ["xc3sprog :p", "fomu-flash -r", "setgpio"])
 
     def test_a314d_stopped_for_the_flash_and_started_after(self):
         open(os.environ["FAKE_A314"], "w").write("active")

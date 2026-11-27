@@ -10,8 +10,10 @@ Ported from tf4060/boards/tf4060r5/flash_ram.sh and flash_bus.sh:
   * CPLD, on every flash: first find it on the JTAG chain (xc3sprog -j only
     reads IDCODEs, so it is tried up to CHAIN_TRIES times), then read its fuses
     back (FILE:v, verify only). If they already match the image, it isn't erased.
-    Otherwise xc3sprog -c gpiod_creator -p 0 -v, one attempt per flash. A
-    failure is recorded: the pages show it with Retry (the same release again),
+    Otherwise three xc3sprog runs, each checked by its exit status: -e (erase
+    and blank check), FILE:p (program the blank device), FILE:v (verify); one
+    attempt per flash, stopping at the first step that fails. A failure is
+    recorded: the pages show it with Retry (the same release again),
     and the review page notes it before the next flash. Nothing is locked.
     "No JTAG Chain found" isn't recorded: xc3sprog stops there before it erases
     anything.
@@ -45,8 +47,12 @@ from pathlib import Path
 from . import config
 from .fwimage import FirmwareError, load_release
 
-# xc3sprog's exit code is the verify result (1 on a fuse mismatch); with -v it
-# also prints "Success! Verify time ..." when every fuse matched.
+# The CPLD is flashed in three xc3sprog runs, each judged by its exit status
+# (xc3sprog with tfpi's patches, sources.conf): -e erases and blank-checks,
+# FILE:p programs the blank device, FILE:v verifies every fuse. An xc3sprog
+# without FILE:p (its usage lists "p: XC95XL") gets the one-run write instead,
+# judged by its exit status (the verify result) and its "Success! Verify" line.
+CPLD_STEPS_USAGE = re.compile(r"\bp: XC95XL")
 CPLD_SUCCESS = re.compile(r"Success! Verify")
 CPLD_PROBLEM = re.compile(r"Mismatch at|failed|No JTAG|not found|Unknown", re.I)
 # xc3sprog -j lists each device it reads an IDCODE from, e.g.
@@ -268,12 +274,23 @@ def cpld_matches(jed):
     rc, output = run([config.XC3SPROG, "-c", config.XC3SPROG_CABLE, "-p", "0", "-v", f"{jed}:v"])
     if rc and CPLD_NOT_REACHED.search(output):
         raise FlashError(NOT_REACHED)
-    if rc == 0 and CPLD_SUCCESS.search(output):
+    if rc == 0:
         return True
     differ = next((line.strip() for line in output.splitlines() if CPLD_PROBLEM.search(line)), None)
     log("CPLD: " + (f"differs from this image ({differ})" if differ else
                     f"could not be compared (xc3sprog exit status {rc})"))
     return False
+
+
+def xc3sprog_has_steps():
+    """True if this xc3sprog has FILE:p (program only), so -e / FILE:p / FILE:v
+    can run as separate checked steps."""
+    try:
+        done = subprocess.run([config.XC3SPROG, "-h"], capture_output=True, text=True,
+                              errors="replace", timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return bool(CPLD_STEPS_USAGE.search(done.stdout + done.stderr))
 
 
 def flash_cpld(release, state, work):
@@ -299,6 +316,7 @@ def flash_cpld(release, state, work):
         config.save_state(state)
         log("CPLD: its fuses already match this image; not erased or programmed")
         return "fuses match, not erased"
+    steps = xc3sprog_has_steps()
     before = dict(cpld)
     cpld["flashes"] += 1
     cpld["time"] = config.now()
@@ -306,22 +324,34 @@ def flash_cpld(release, state, work):
     cpld["file"] = None
     config.save_state(state)
 
-    log(f"CPLD: programming {release.cpld_device or 'CPLD'} (one attempt, no retries)")
-    rc, output = run([config.XC3SPROG, "-c", config.XC3SPROG_CABLE, "-p", "0", "-v", jed])
-    if rc and CPLD_NOT_REACHED.search(output):
-        # The chain went away after find_cpld(): the CPLD still holds what it had.
-        state["cpld"] = dict(before, time=config.now(), last_result="not-found")
-        config.save_state(state)
-        raise FlashError(NOT_REACHED)
-    if rc or not CPLD_SUCCESS.search(output):
-        problem = next((line.strip() for line in output.splitlines() if CPLD_PROBLEM.search(line)), None)
-        reason = f"xc3sprog exit status {rc}" + (f" ({problem})" if problem else
-                                                  "" if rc else ", no verify success line")
-        cpld["last_result"] = "failed"
-        cpld["fault"] = f"{config.now()}: {reason}"
-        cpld["fault_release"] = release.name           # what Retry flashes again
-        config.save_state(state)
-        raise CpldFailed(f"CPLD programming failed: {reason}.")
+    xc3 = [config.XC3SPROG, "-c", config.XC3SPROG_CABLE, "-p", "0", "-v"]
+    if steps:
+        log(f"CPLD: {release.cpld_device or 'CPLD'}: erase, program, verify (one attempt, each step checked)")
+        plan_steps = (("erase", ["-e"]), ("program", [f"{jed}:p"]), ("verify", [f"{jed}:v"]))
+    else:
+        log("NOTE: this Pi's xc3sprog can't run the erase, program and verify as separate steps; "
+            "flashing the CPLD in one run (erase, program and verify together). Updating the "
+            "TF Pi software gets the separate checked steps.")
+        plan_steps = (("write", [str(jed)]),)
+    for step, args in plan_steps:
+        log(f"CPLD: {step}")
+        rc, output = run(xc3 + args)
+        if step == "write" and rc == 0 and not CPLD_SUCCESS.search(output):
+            rc = 1                                      # the one-run write must end with its verify line
+        if rc and step in ("erase", "write") and CPLD_NOT_REACHED.search(output):
+            # The chain went away after find_cpld(): nothing was erased.
+            state["cpld"] = dict(before, time=config.now(), last_result="not-found")
+            config.save_state(state)
+            raise FlashError(NOT_REACHED)
+        if rc:
+            problem = next((line.strip() for line in output.splitlines() if CPLD_PROBLEM.search(line)), None)
+            reason = f"{step} failed" + (f": {problem}" if problem else "") + f" (xc3sprog exit status {rc})"
+            cpld["last_result"] = f"{step}-failed"
+            cpld["fault"] = f"{config.now()}: {reason}"
+            cpld["fault_release"] = release.name           # what Retry flashes again
+            config.save_state(state)
+            raise CpldFailed(f"CPLD {reason}.")
+        log(f"CPLD: {step} OK")
     cpld["sha"] = release.cpld_sha
     cpld["device"] = release.cpld_device
     cpld["file"] = release.cpld_file

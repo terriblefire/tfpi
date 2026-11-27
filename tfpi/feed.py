@@ -257,7 +257,7 @@ def view(feed, state, dev):
     mine = installed_build(builds, state)
     out = {"checked": bool(feed), "time": feed.get("time"), "error": feed.get("error"), "developer": dev,
            "latest": latest, "installed": mine, "available": False, "installed_newer": False,
-           "recent": visible[:RECENT] if dev else []}
+           "recent": visible[:RECENT]}         # releases; developer mode adds dev builds
     if latest and mine is not latest:
         if mine is not None and builds.index(mine) < builds.index(latest):
             out["installed_newer"] = True          # e.g. a dev build, developer mode off

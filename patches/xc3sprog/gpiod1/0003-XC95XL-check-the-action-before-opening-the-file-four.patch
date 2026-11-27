@@ -1,0 +1,165 @@
+From ed9d946daef7f2f4339722a4677635803a31457c Mon Sep 17 00:00:00 2001
+From: Stephen Leary <stephen@terriblefire.com>
+Date: Tue, 17 Nov 2026 20:47:02 +0000
+Subject: [PATCH 3/6] XC95XL: check the action before opening the file;
+ four-digit C field
+
+From a second review:
+- The filespec must be FILE or FILE:ACTION with a one-letter action.
+  getFile_and_Attribute_from_name turned any longer action (":read",
+  ":verify") into a write. The action and -e are now checked before the
+  file is opened, so a refused read no longer creates or truncates its
+  output file.
+- A fuse checksum counts only when its C field has exactly four hex
+  digits; an empty "C*" no longer passes.
+---
+ jedecfile.cpp |  8 +++++++-
+ xc3sprog.cpp  | 55 ++++++++++++++++++++++++++++-----------------------
+ 2 files changed, 37 insertions(+), 26 deletions(-)
+
+diff --git a/jedecfile.cpp b/jedecfile.cpp
+index 6258815..815dcfd 100644
+--- a/jedecfile.cpp
++++ b/jedecfile.cpp
+@@ -90,6 +90,7 @@ static void m_end(int ch, struct state_mach*m);
+ 
+ int m_N_item;
+ int m_N_pos;
++int m_C_digits;
+ int m_H_pos = 0;
+ char m_H_string[MAX_SIZE];
+ char m_N_strings[MAX_ITEM][MAX_SIZE];
+@@ -152,6 +153,8 @@ static void m_base(int ch, struct state_mach*m)
+           case 'C':
+             m->state = m_C;
+             m->jed->checksum = 0;
++            m->jed->has_checksum = 0;
++            m_C_digits = 0;
+             break;
+           case 'N':
+             m->state = m_N;
+@@ -177,7 +180,8 @@ static void m_C(int ch, struct state_mach*m)
+             return;
+ 
+       if (ch == '*') {
+-            m->jed->has_checksum = 1;
++            /* a fuse checksum is exactly four hex digits */
++            m->jed->has_checksum = (m_C_digits == 4);
+             m->state = m_base;
+             return;
+       }
+@@ -186,6 +190,7 @@ static void m_C(int ch, struct state_mach*m)
+         {
+           m->jed->checksum <<=4;
+           m->jed->checksum += ch - '0';
++          m_C_digits++;
+           return;
+         }
+       ch &= 0x5f;
+@@ -193,6 +198,7 @@ static void m_C(int ch, struct state_mach*m)
+         {
+           m->jed->checksum <<=4;
+           m->jed->checksum += ch - '7';
++          m_C_digits++;
+           return;
+         }
+ 
+diff --git a/xc3sprog.cpp b/xc3sprog.cpp
+index 66e614b..da706d4 100644
+--- a/xc3sprog.cpp
++++ b/xc3sprog.cpp
+@@ -1348,7 +1348,7 @@ int programXC95X(Jtag &jtag, unsigned long id, int argc, char **args,
+     char action = 'w';
+     FILE *jedecfile_fp = NULL;
+ 
+-    /* Check the arguments and the file before anything touches the device */
++    /* Check the arguments and the file before the device enters ISP mode */
+     if (argc > 1)
+     {
+         fprintf(stderr, "Only one file is supported: %s\n", args[1]);
+@@ -1356,40 +1356,40 @@ int programXC95X(Jtag &jtag, unsigned long id, int argc, char **args,
+     }
+     if (argc == 1)
+     {
+-        unsigned int jedecfile_offset = 0;
+-        unsigned int jedecfile_rlength = 0;
+-        FILE_STYLE  jedecfile_style= STYLE_JEDEC;
+-
+-        jedecfile_fp = getFile_and_Attribute_from_name
+-            (args[0], &action, NULL, &jedecfile_offset,
+-             &jedecfile_style, &jedecfile_rlength);
+-        if (jedecfile_offset != 0 || jedecfile_rlength != 0 ||
+-            jedecfile_style != STYLE_JEDEC)
++        /* Only FILE or FILE:ACTION with a one-letter action. Check it here:
++           getFile_and_Attribute_from_name turns any longer action into w,
++           and opens (for a read, creates) the file. */
++        const char *colon = strchr(args[0], ':');
++        char given = colon ? colon[1] : 'w';
++        if (colon && (strlen(colon + 1) != 1 || strchr(colon + 1, ':')))
+         {
+-            fprintf(stderr, "%s: offsets, lengths and styles other than "
+-                    "JEDEC are not supported\n", args[0]);
++            fprintf(stderr, "%s: use FILE or FILE:ACTION, ACTION one of "
++                    "w, v, r, R\n", args[0]);
+             return 1;
+         }
+-        if (action == 'W')
++        if (given == 'W')
+         {
+             fprintf(stderr, "%s: W (no erase) is not supported, use w\n",
+                     args[0]);
+             return 1;
+         }
+-        if (action != 'r' && action != 'v' && action != 'w')
++        if (tolower(given) != 'r' && tolower(given) != 'v' && tolower(given) != 'w')
+         {
+-            fprintf(stderr, "%s: unknown action '%c'\n", args[0], action);
++            fprintf(stderr, "%s: unknown action '%c'\n", args[0], given);
+             return 1;
+         }
+-        if (!jedecfile_fp)
++        if (erase && tolower(given) != 'w')
+         {
+-            fprintf(stderr, "%s: cannot open the file\n", args[0]);
++            fprintf(stderr, "-e would erase the device before the %s\n",
++                    tolower(given) == 'r' ? "read" : "verify");
+             return 1;
+         }
+-        if (erase && action != 'w')
++
++        jedecfile_fp = getFile_and_Attribute_from_name
++            (args[0], &action, NULL, NULL, NULL, NULL);
++        if (!jedecfile_fp)
+         {
+-            fprintf(stderr, "-e would erase the device before the %s\n",
+-                    action == 'r' ? "read" : "verify");
++            fprintf(stderr, "%s: cannot open the file\n", args[0]);
+             return 1;
+         }
+         if (action != 'r')
+@@ -1405,12 +1405,17 @@ int programXC95X(Jtag &jtag, unsigned long id, int argc, char **args,
+                         jedecfile.getLength(), device, alg.fuseCount());
+                 return 1;
+             }
+-            if (!jedecfile.hasChecksum() ||
+-                jedecfile.getChecksum() != jedecfile.calcChecksum())
++            if (!jedecfile.hasChecksum())
++            {
++                fprintf(stderr, "%s: no four-digit C (fuse checksum) field\n",
++                        args[0]);
++                return 1;
++            }
++            if (jedecfile.getChecksum() != jedecfile.calcChecksum())
+             {
+-                fprintf(stderr, "%s: checksum %s%04x, the fuses sum to %04x\n",
+-                        args[0], jedecfile.hasChecksum() ? "" : "missing, ",
+-                        jedecfile.getChecksum(), jedecfile.calcChecksum());
++                fprintf(stderr, "%s: checksum %04x, the fuses sum to %04x\n",
++                        args[0], jedecfile.getChecksum(),
++                        jedecfile.calcChecksum());
+                 return 1;
+             }
+             if (strncasecmp(jedecfile.getDevice(), device, strlen(device)) != 0)
+-- 
+2.50.1 (Apple Git-155)
+

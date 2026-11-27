@@ -1,0 +1,599 @@
+From 21fefed09f0c690bd113e5d8da2e798a0884043d Mon Sep 17 00:00:00 2001
+From: Stephen Leary <stephen@terriblefire.com>
+Date: Tue, 17 Nov 2026 20:35:19 +0000
+Subject: [PATCH 2/6] XC95XL: check every argument and the JEDEC file before
+ the device
+
+From a review of the first change:
+- One file per run. Its action, the JEDEC file (complete up to ETX,
+  fuse count, a C checksum that matches, the device name) and -e are
+  all checked before anything is sent to the device; -e with a read or
+  verify, W (no erase), unknown actions and unopenable files are refused.
+- A read that cannot write its file exits 1.
+- Before erasing or programming, check the IR capture as iMPACT does
+  (000xxx01, bits 4:2 not checked).
+- Waits are timed with the monotonic clock.
+- JEDEC parser: header and N-field writes stay inside their buffers.
+- gpiod cable: Init() fails when a JTAG line could not be requested; the
+  constructor stops at the first failure and closes the chip once.
+---
+ iogpiodpi.cpp    |  81 +++++++++++---------------
+ iogpiodpi.h      |   1 +
+ jedecfile.cpp    |  53 +++++++++++++----
+ jedecfile.h      |   4 ++
+ progalgxc95x.cpp |  29 +++++++--
+ progalgxc95x.h   |   1 +
+ xc3sprog.cpp     | 149 ++++++++++++++++++++++++-----------------------
+ 7 files changed, 184 insertions(+), 134 deletions(-)
+
+diff --git a/iogpiodpi.cpp b/iogpiodpi.cpp
+index a76b42d..7b1ce5f 100644
+--- a/iogpiodpi.cpp
++++ b/iogpiodpi.cpp
+@@ -1,79 +1,66 @@
+ #include <iogpiodpi.h>
+ #include <iostream>
++#include <stdio.h>
+ 
+ 
+ IOGPIODPi::IOGPIODPi(int tms, int tck, int tdi, int tdo)
+  : TMSPin(tms), TCKPin(tck), TDIPin(tdi), TDOPin(tdo)
+ {
++    TMSline = TCKline = TDIline = TDOline = NULL;
+     chip = gpiod_chip_open_by_name("gpiochip0"); 
+-
+     if (!chip) {
+-    perror("Open chip failed");
++        perror("Open chip failed");
++        return;
+     }
+ 
+     TMSline = gpiod_chip_get_line(chip, TMSPin);
+     TCKline = gpiod_chip_get_line(chip, TCKPin);
+     TDIline = gpiod_chip_get_line(chip, TDIPin);
+     TDOline = gpiod_chip_get_line(chip, TDOPin);
+-
+-    if (!TMSline) {
+-        perror("TMSline line config failed");
+-        gpiod_chip_close(chip);
++    if (!TMSline || !TCKline || !TDIline || !TDOline) {
++        perror("JTAG line config failed");
++        goto fail;
+     }
+-
+-    if (!TCKline) {
+-        perror("TCKline line config failed");
+-        gpiod_chip_close(chip);
+-    }
+-
+-    if (!TDIline) {
+-        perror("TDIline line config failed");
+-        gpiod_chip_close(chip);
+-    }
+-
+-    if (!TDOline) {
+-        perror("TDOline line config failed");
+-        gpiod_chip_close(chip);
+-    }
+-
+-    int ret;
+-
+-    ret = gpiod_line_request_output(TMSline, "Consumer", 0);
+-    if (ret < 0) {
++    if (gpiod_line_request_output(TMSline, "Consumer", 0) < 0) {
+         perror("Request TMSline as output failed");
+-        gpiod_line_release(TMSline);
+-        gpiod_chip_close(chip);
++        goto fail;
+     }
+-
+-    ret = gpiod_line_request_output(TCKline, "Consumer", 0);
+-    if (ret < 0) {
++    if (gpiod_line_request_output(TCKline, "Consumer", 0) < 0) {
+         perror("Request TCKline as output failed");
+-        gpiod_line_release(TCKline);
+-        gpiod_chip_close(chip);
++        goto fail;
+     }
+-
+-    ret = gpiod_line_request_output(TDIline, "Consumer", 0);
+-    if (ret < 0) {
++    if (gpiod_line_request_output(TDIline, "Consumer", 0) < 0) {
+         perror("Request TDIline as output failed");
+-        gpiod_line_release(TDIline);
+-        gpiod_chip_close(chip);
++        goto fail;
+     }
+-
+-    ret = gpiod_line_request_input(TDOline, "Consumer");
+-    if (ret < 0) {
++    if (gpiod_line_request_input(TDOline, "Consumer") < 0) {
+         perror("Request TDOline as input failed");
+-        gpiod_line_release(TDOline);
+-        gpiod_chip_close(chip);
++        goto fail;
+     }
++    return;
++
++fail:
++    /* closing the chip releases every line requested from it */
++    gpiod_chip_close(chip);
++    chip = NULL;
++    TMSline = TCKline = TDIline = TDOline = NULL;
++}
+ 
++/* The constructor cannot fail: report lines it could not get here, so
++   xc3sprog stops instead of clocking JTAG through missing lines. */
++int IOGPIODPi::Init(struct cable_t *cable, const char *devopt, unsigned int freq)
++{
++    if (!chip)
++    {
++        fprintf(stderr, "Could not get the JTAG GPIO lines\n");
++        return 1;
++    }
++    return 0;
+ }
+ 
+ IOGPIODPi::~IOGPIODPi()
+ {
+-        gpiod_line_release(TMSline);
+-        gpiod_line_release(TCKline);
+-        gpiod_line_release(TDIline);
+-        gpiod_line_release(TDOline);
++    if (chip)
+         gpiod_chip_close(chip);
+ }
+ 
+diff --git a/iogpiodpi.h b/iogpiodpi.h
+index 64e04e4..289ce09 100644
+--- a/iogpiodpi.h
++++ b/iogpiodpi.h
+@@ -9,6 +9,7 @@ class IOGPIODPi : public IOBase
+  public:
+   IOGPIODPi(int tms, int tck, int tdi, int tdo);
+   virtual ~IOGPIODPi();
++  int Init(struct cable_t *cable, const char *devopt, unsigned int freq);
+ 
+  protected:
+   void tx(bool tms, bool tdi);
+diff --git a/jedecfile.cpp b/jedecfile.cpp
+index 978aa72..6258815 100644
+--- a/jedecfile.cpp
++++ b/jedecfile.cpp
+@@ -86,6 +86,7 @@ static void m_QF(int ch, struct state_mach*m);
+ static void m_QP(int ch, struct state_mach*m);
+ static void m_skip(int ch, struct state_mach*m);
+ static void m_N(int ch, struct state_mach*m);
++static void m_end(int ch, struct state_mach*m);
+ 
+ int m_N_item;
+ int m_N_pos;
+@@ -118,15 +119,20 @@ static void m_header(int ch, struct state_mach*m)
+        case '\r':
+ 	 if (m_H_pos)
+ 	   {
++	     m_H_string[m_H_pos] = 0;
+ 	     char * ptr = strchr( m_H_string, ':');
+ 	     if (ptr)
+-	       strncpy(m->jed->date, ptr, MAX_SIZE);
++	       {
++		 strncpy(m->jed->date, ptr, MAX_SIZE-1);
++		 m->jed->date[MAX_SIZE-1] = 0;
++	       }
+ 	   }
++	 m_H_pos = 0;
+ 	 m->state = m_startup;
+ 	 break;
+        default:
+-	 m_H_string[m_H_pos] = ch;
+-	 m_H_pos++;
++	 if (m_H_pos < MAX_SIZE-1)
++	   m_H_string[m_H_pos++] = ch;
+        }
+ }
+ 
+@@ -150,6 +156,14 @@ static void m_base(int ch, struct state_mach*m)
+           case 'N':
+             m->state = m_N;
+ 	    m_N_item = -1;
++	    m_N_pos = 0;
++	    for (int i = 0; i < MAX_ITEM; i++)
++	      m_N_strings[i][0] = 0;
++            break;
++          case '\003':
++            /* ETX: the transmission checksum after it is not read */
++            m->jed->complete = 1;
++            m->state = m_end;
+             break;
+           default:
+             m->state = m_skip;
+@@ -163,6 +177,7 @@ static void m_C(int ch, struct state_mach*m)
+             return;
+ 
+       if (ch == '*') {
++            m->jed->has_checksum = 1;
+             m->state = m_base;
+             return;
+       }
+@@ -244,27 +259,34 @@ static void m_Lfuse(int ch, struct state_mach*m)
+ #define strnicmp strncasecmp
+ #endif
+ 
++/* Terminate the N item being read, if it is one we keep */
++static void m_N_end_item(void)
++{
++  if (m_N_item >= 0 && m_N_item < MAX_ITEM)
++    m_N_strings[m_N_item][m_N_pos] = 0;
++}
++
+ static void m_N(int ch, struct state_mach*m)
+ {
+       switch (ch) {
+ 
+       case '*':
++	m_N_end_item();
+ 	if ((stricmp(m_N_strings[0], "DEVICE")) == 0)
+ 	  {
+-	    m_N_strings[m_N_item][m_N_pos] = 0;
+-	    strncpy(m->jed->device, m_N_strings[1], MAX_SIZE);
++	    strncpy(m->jed->device, m_N_strings[1], MAX_SIZE-1);
++	    m->jed->device[MAX_SIZE-1] = 0;
+ 	  }
+ 	if ((stricmp(m_N_strings[0], "VERSION")) == 0)
+ 	  {
+-	    m_N_strings[m_N_item][m_N_pos] = 0;
+-	    strncpy(m->jed->version, m_N_strings[1], MAX_SIZE);
++	    strncpy(m->jed->version, m_N_strings[1], MAX_SIZE-1);
++	    m->jed->version[MAX_SIZE-1] = 0;
+ 	  }
+ 	m->state = m_base;
+ 	m_N_item= -1;
+ 	break;
+       case ' ':
+-	if(m_N_item >=0)
+-	  m_N_strings[m_N_item][m_N_pos] = 0;
++	m_N_end_item();
+ 	if (m_N_item < MAX_ITEM)
+ 	  {
+ 	    /* Don't stumble on too many items like in ISE XC2C Jedecfiles */
+@@ -277,8 +299,7 @@ static void m_N(int ch, struct state_mach*m)
+ 	  
+       default:
+ 	if((m_N_item >=0) && (m_N_item <MAX_ITEM) && (m_N_pos < MAX_SIZE-1))
+-	  m_N_strings[m_N_item][m_N_pos] = ch;
+-	m_N_pos++;
++	  m_N_strings[m_N_item][m_N_pos++] = ch;
+ 	break;
+       }
+ }
+@@ -347,6 +368,11 @@ static void m_QP(int ch, struct state_mach*m)
+       throw  io_exception(std::string("m_QP"));
+ }
+ 
++/* After ETX: nothing more is part of the fuse data */
++static void m_end(int ch, struct state_mach*m)
++{
++}
++
+ static void m_skip(int ch, struct state_mach*m)
+ {
+       switch (ch) {
+@@ -362,6 +388,8 @@ JedecFile::JedecFile(void)
+   : Error(false), logfile(stderr) 
+ {
+   jed.checksum = 0;
++  jed.has_checksum = 0;
++  jed.complete = 0;
+   jed.fuse_count = 0;
+   jed.pin_count = 0;
+   jed.fuse_list = 0;
+@@ -387,6 +415,9 @@ int JedecFile::readFile(FILE *fp)
+   //jed = (jedec_data_t)calloc(1, sizeof(struct jedec_data));
+   m.jed = &jed;
+   m.state = m_startup;
++  m_H_pos = 0;
++  m_N_item = -1;
++  m_N_pos = 0;
+   while ((ch = fgetc(fp)) != EOF) {
+     m.state(ch, &m);
+     if (m.state == 0) {
+diff --git a/jedecfile.h b/jedecfile.h
+index ad117fb..f02c2c4 100644
+--- a/jedecfile.h
++++ b/jedecfile.h
+@@ -39,6 +39,8 @@ struct jedec_data {
+       unsigned pin_count;
+       unsigned vector_count;
+       unsigned checksum;
++      int has_checksum;   /* a C field was read */
++      int complete;       /* ETX was read */
+       unsigned char fuse_default;
+ 
+       unsigned char*fuse_list;
+@@ -65,6 +67,8 @@ class JedecFile
+   int readFile(FILE *fp);
+   inline unsigned int getLength(){return jed.fuse_count;}
+   inline unsigned short getChecksum(){return jed.checksum;}
++  inline bool hasChecksum(){return jed.has_checksum;}
++  inline bool isComplete(){return jed.complete;}
+   char *getDevice(){return jed.device;}
+   char *getVersion(){return jed.version;}
+   char *getDate(){return jed.date;}
+diff --git a/progalgxc95x.cpp b/progalgxc95x.cpp
+index cae86a3..1ba71b9 100644
+--- a/progalgxc95x.cpp
++++ b/progalgxc95x.cpp
+@@ -20,6 +20,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ */
+ 
+ #include <stdio.h>
++#include <time.h>
+ #include <sys/time.h>
+ #include <string.h>
+ #include <unistd.h>
+@@ -63,17 +64,33 @@ ProgAlgXC95X::ProgAlgXC95X(Jtag &j, int s)
+    cable runs at an unknown rate, so meet both the count and the time. */
+ void ProgAlgXC95X::wait_idle(int tck, unsigned int usec)
+ {
+-  struct timeval tv[2];
++  struct timespec t0, t1;
+   long done;
+ 
+-  gettimeofday(tv, NULL);
++  clock_gettime(CLOCK_MONOTONIC, &t0);
+   jtag->cycleTCK(tck);
+-  gettimeofday(tv+1, NULL);
+-  done = deltaT(tv, tv + 1);
++  clock_gettime(CLOCK_MONOTONIC, &t1);
++  done = (t1.tv_sec - t0.tv_sec) * 1000000L + (t1.tv_nsec - t0.tv_nsec) / 1000;
+   if (done < (long)usec)
+     jtag->Usleep(usec - done);
+ }
+ 
++/* iMPACT's check before erasing or programming: the instruction register
++   captures 000xxx01 (bits 4:2 are status and not checked). Anything else
++   means the chain is not what we expect. Returns 0 when it is. */
++int ProgAlgXC95X::check_ir_capture()
++{
++  byte capture;
++  jtag->shiftIR(&BYPASS, &capture);
++  if ((capture & 0xe3) != 0x01)
++    {
++      fprintf(stderr, "JTAG instruction capture %02x, expected 01 in bits 7:5 "
++              "and 1:0\n", capture);
++      return 1;
++    }
++  return 0;
++}
++
+ void ProgAlgXC95X::flow_enable()
+ {
+   byte data[1];
+@@ -397,6 +414,8 @@ void ProgAlgXC95X::array_read(JedecFile &file)
+ int ProgAlgXC95X::erase()
+ {
+   int ret;
++  if (check_ir_capture())
++    return 1;
+   flow_enable();
+   ret = flow_erase();
+   if (ret == 0)
+@@ -421,6 +440,8 @@ int ProgAlgXC95X::blank_check()
+ int ProgAlgXC95X::array_program(JedecFile &file)
+ {
+   int ret;
++  if (check_ir_capture())
++    return 1;
+   flow_enable();
+   ret = flow_array_program(file);
+   if (ret)
+diff --git a/progalgxc95x.h b/progalgxc95x.h
+index b00e517..84343f5 100644
+--- a/progalgxc95x.h
++++ b/progalgxc95x.h
+@@ -45,6 +45,7 @@ class ProgAlgXC95X
+   Jtag *jtag;
+   int DRegLength;
+   void wait_idle(int tck, unsigned int usec);
++  int check_ir_capture();
+   void flow_enable();
+   void flow_disable();
+   void flow_error_exit();
+diff --git a/xc3sprog.cpp b/xc3sprog.cpp
+index a4bb639..66e614b 100644
+--- a/xc3sprog.cpp
++++ b/xc3sprog.cpp
+@@ -1342,113 +1342,118 @@ test_reconf:
+ int programXC95X(Jtag &jtag, unsigned long id, int argc, char **args, 
+                  bool verbose, bool erase, const char *device)
+ {
+-    int i, size = (id & 0x000ff000)>>13;
++    int size = (id & 0x000ff000)>>13;
+     ProgAlgXC95X alg(jtag, size);
+-    
+-    if (erase)
++    JedecFile  jedecfile;
++    char action = 'w';
++    FILE *jedecfile_fp = NULL;
++
++    /* Check the arguments and the file before anything touches the device */
++    if (argc > 1)
+     {
+-        if (alg.erase())
+-        {
+-            fprintf(stderr, "Erase failed\n");
+-            return 1;
+-        }
++        fprintf(stderr, "Only one file is supported: %s\n", args[1]);
++        return 1;
+     }
+-
+-    for (i = 0; i< argc; i++)
++    if (argc == 1)
+     {
+-        int ret = 0;
+         unsigned int jedecfile_offset = 0;
+         unsigned int jedecfile_rlength = 0;
+-        char action = 'w';
+-        JedecFile  jedecfile;
+         FILE_STYLE  jedecfile_style= STYLE_JEDEC;
+-             
+-        if (i>1)
++
++        jedecfile_fp = getFile_and_Attribute_from_name
++            (args[0], &action, NULL, &jedecfile_offset,
++             &jedecfile_style, &jedecfile_rlength);
++        if (jedecfile_offset != 0 || jedecfile_rlength != 0 ||
++            jedecfile_style != STYLE_JEDEC)
+         {
+-            fprintf(stderr, "Multiple arguments not supported: %s\n", args[i]);
+-            continue;
++            fprintf(stderr, "%s: offsets, lengths and styles other than "
++                    "JEDEC are not supported\n", args[0]);
++            return 1;
+         }
+-        
+-        FILE *jedecfile_fp = 
+-            getFile_and_Attribute_from_name
+-            (args[i], &action, NULL, &jedecfile_offset,
+-             &jedecfile_style, &jedecfile_rlength);
+-        
+-        if (jedecfile_offset != 0)
++        if (action == 'W')
+         {
+-            fprintf(stderr, "Offset %d not supported, Using 0\n", 
+-                    jedecfile_offset);
+-            jedecfile_offset = 0;
++            fprintf(stderr, "%s: W (no erase) is not supported, use w\n",
++                    args[0]);
++            return 1;
+         }
+-        if (jedecfile_rlength != 0)
++        if (action != 'r' && action != 'v' && action != 'w')
+         {
+-            fprintf(stderr, "Readlength %d not supported, Using 0\n", 
+-                    jedecfile_rlength);
+-            jedecfile_rlength = 0;
++            fprintf(stderr, "%s: unknown action '%c'\n", args[0], action);
++            return 1;
+         }
+-        if(jedecfile_style != STYLE_JEDEC)
++        if (!jedecfile_fp)
+         {
+-            fprintf(stderr, "Style %s not supported, skipping\n",
+-                    BitFile::styleToString(jedecfile_style));
++            fprintf(stderr, "%s: cannot open the file\n", args[0]);
++            return 1;
+         }
+-        if (action == 'r')
++        if (erase && action != 'w')
+         {
+-            alg.array_read(jedecfile);
+-            jedecfile.saveAsJed(device, jedecfile_fp);
++            fprintf(stderr, "-e would erase the device before the %s\n",
++                    action == 'r' ? "read" : "verify");
++            return 1;
+         }
+-        else if (action == 'v' || tolower(action) == 'w') 
++        if (action != 'r')
+         {
+-            /* Check the file before anything touches the device */
+-            if (jedecfile.readFile(jedecfile_fp))
++            if (jedecfile.readFile(jedecfile_fp) || !jedecfile.isComplete())
+             {
+-                fprintf(stderr, "%s: not a valid JEDEC file\n", args[i]);
++                fprintf(stderr, "%s: not a complete JEDEC file\n", args[0]);
+                 return 1;
+             }
+             if (jedecfile.getLength() != alg.fuseCount())
+             {
+-                fprintf(stderr, "%s: %u fuses, the %s has %u\n", args[i],
++                fprintf(stderr, "%s: %u fuses, the %s has %u\n", args[0],
+                         jedecfile.getLength(), device, alg.fuseCount());
+                 return 1;
+             }
+-            if (jedecfile.getChecksum() != jedecfile.calcChecksum())
++            if (!jedecfile.hasChecksum() ||
++                jedecfile.getChecksum() != jedecfile.calcChecksum())
+             {
+-                fprintf(stderr, "%s: checksum %04x, the fuses sum to %04x\n",
+-                        args[i], jedecfile.getChecksum(),
+-                        jedecfile.calcChecksum());
++                fprintf(stderr, "%s: checksum %s%04x, the fuses sum to %04x\n",
++                        args[0], jedecfile.hasChecksum() ? "" : "missing, ",
++                        jedecfile.getChecksum(), jedecfile.calcChecksum());
+                 return 1;
+             }
+-            if (jedecfile.getDevice()[0] &&
+-                strncasecmp(jedecfile.getDevice(), device, strlen(device)) != 0)
++            if (strncasecmp(jedecfile.getDevice(), device, strlen(device)) != 0)
+             {
+                 fprintf(stderr, "%s is for a %s, the device is a %s\n",
+-                        args[i], jedecfile.getDevice(), device);
++                        args[0], jedecfile.getDevice()[0] ?
++                        jedecfile.getDevice() : "(no device named)", device);
+                 return 1;
+             }
+-            if (action == 'w')
+-            {
+-                if (!erase)
+-                {
+-                    if (alg.erase())
+-                    {
+-                        fprintf(stderr, "Erase failed: not programming\n");
+-                        return 1;
+-                    }
+-                }
+-	    }
+-	    if(tolower(action) == 'w')
+-            {
+-                if (alg.array_program(jedecfile))
+-                {
+-                    fprintf(stderr, "Programming failed\n");
+-                    return 1;
+-                }
+-            }
+-            ret = alg.array_verify(jedecfile);
+         }
+-        if(ret)
+-            return ret;
+     }
+-    return 0;
++
++    if (erase || (argc == 1 && action == 'w'))
++    {
++        if (alg.erase())
++        {
++            fprintf(stderr, "Erase failed%s\n", argc ? ": not programming" : "");
++            return 1;
++        }
++    }
++    if (argc == 0)
++        return 0;
++
++    if (action == 'r')
++    {
++        alg.array_read(jedecfile);
++        jedecfile.saveAsJed(device, jedecfile_fp);
++        if (fflush(jedecfile_fp) || ferror(jedecfile_fp))
++        {
++            fprintf(stderr, "%s: write failed\n", args[0]);
++            return 1;
++        }
++        return 0;
++    }
++    if (action == 'w')
++    {
++        if (alg.array_program(jedecfile))
++        {
++            fprintf(stderr, "Programming failed\n");
++            return 1;
++        }
++    }
++    return alg.array_verify(jedecfile);
+ }
+ 
+ int programXC2C( Jtag &jtag, unsigned int id, int argc, char ** args, 
+-- 
+2.50.1 (Apple Git-155)
+

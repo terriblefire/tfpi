@@ -21,9 +21,9 @@
 {% endif %}
 <form method="post" action="/settings/developer" class="switchrow"><input type="hidden" name="csrf" value="{{ csrf }}">
 <label class="switch"><input type="checkbox" name="on" value="1" {{ 'checked' if fw.developer }} onchange="this.form.submit()" aria-label="Developer mode"><span class="slider"></span></label>
-<span><b>Developer mode</b><br><span class="muted">{{ "On: developer builds (untagged, not tested releases) are offered too, and recent builds are listed below." if fw.developer else "Off: only tagged releases are offered. Turn on to also see developer builds." }}</span></span>
+<span><b>Developer mode</b><br><span class="muted">{{ "On: developer builds (untagged, not tested releases) are listed and offered too." if fw.developer else "Off: only tagged releases are listed and offered. Turn on to also see developer builds." }}</span></span>
 <noscript><button class="secondary">Save</button></noscript></form>
-{% if fw.recent %}<h3>Recent builds</h3><table>
+{% if fw.recent %}<h3>{{ "Recent builds" if fw.developer else "Releases" }}</h3><table>
 {% for b in fw.recent %}<tr><td>{{ m.buildname(b) }} {% if b.channel == "release" %}<span class="ok">release</span>{% endif %}
 {% if fw.installed and b.name == fw.installed.name %} <span class="ok">(installed)</span>{% endif %}
 {% if b.summary %}<br><span class="muted">{{ b.summary }}</span>{% endif %}</td>

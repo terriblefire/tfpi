@@ -56,10 +56,10 @@ hours, or with **Check for firmware**). When a newer release is published, the
 main page shows **Firmware update available**; **Download and review** fetches
 it into the normal review page, and nothing is flashed until you confirm.
 
-Releases are the tagged builds and show their tag (e.g. **v0.1**).
-**Developer mode** (switch on the main page) also offers developer builds (the
-untagged `vLATEST` builds, not tested releases) and lists the recent builds so
-you can pick an older one.
+Releases are the tagged builds and show their tag (e.g. **v0.1**). The
+Firmware tab lists them, older ones too, so you can go back to one.
+**Developer mode** (switch on the Firmware tab) adds the developer builds (the
+untagged `vLATEST` builds, not tested releases) to the list and the update check.
 
 The installed build is recognised by its FPGA and CPLD images, so it doesn't
 matter what the zip was called or how it got onto the Pi.
@@ -107,10 +107,15 @@ set in `/etc/tfpi/tfpi.conf` (`BOARD=tf4060r5`).
   also when tfpi's record says this image is already installed. If they already
   match, it isn't erased or programmed. If the CPLD isn't found but tfpi's record
   says it already holds this image, the flash carries on with a warning.
-- The CPLD is programmed **once** per flash, with verify. If erase or verify
-  fails, the pages say so and offer **Retry**, which flashes the same release
-  again; nothing is locked. If it keeps failing, ask on Discord before trying
-  many more times: every try erases the chip again.
+- The CPLD is flashed **once** per flash, in three xc3sprog steps, each checked
+  by its exit status: erase (with a blank check), program, verify. It stops at
+  the first step that fails and says which one. If this Pi's xc3sprog can't
+  run the steps separately (the installer couldn't build the patched one),
+  tfpi flashes the CPLD in one run as before, judged by its exit status and
+  verify, and the log says so.
+- After a failed CPLD flash the pages say so and offer **Retry**, which flashes
+  the same release again; nothing is locked. If it keeps failing, ask on
+  Discord before trying many more times: every try erases the chip again.
 - Every flash ends by resetting the FPGA (`fomu-flash -r`, then CDONE), also
   after a CPLD-only flash or a failed one, so the FPGA is never left held in reset.
 - Only one flash runs at a time.
@@ -270,7 +275,7 @@ sudo tfpi-update          # rebuild at the commits pinned in sources.conf
 Pinned in [`sources.conf`](sources.conf):
 
 - `fomu-flash` from terriblefire/fomu-flash → `/usr/local/bin/fomu-flash`
-- `xc3sprog` from arkadiuszmakarenko/xc3sprog (cable `gpiod_creator`) → `/usr/local/bin/xc3sprog`
+- `xc3sprog` from arkadiuszmakarenko/xc3sprog at the commit `sources.conf` pins for the Pi's libgpiod, plus the patches in `patches/xc3sprog/` (cable `gpiod_creator`) → `/usr/local/bin/xc3sprog`. If it can't be built, the Pi keeps the xc3sprog it has and the install carries on.
 - a314 from erique/a314 branch `tf4060`, installed with its own `install-pi.sh tf`
   (a314d, SPI overlay, config.txt/cmdline.txt changes, a314 Python services)
   - a314d restarts by itself if it exits (systemd drop-in

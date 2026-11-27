@@ -122,7 +122,10 @@ class FeedTests(FeedBase):
         view = feed.view(result, config.load_state(), dev=False)
         self.assertTrue(view["available"])
         self.assertEqual(view["latest"]["name"], "v0.6_2026-11-07_abc0002")
-        self.assertEqual(view["recent"], [])
+        # every release is listed, older ones too; no dev builds
+        self.assertEqual([b["name"] for b in view["recent"]],
+                         [b["name"] for b in self.builds if b["channel"] == "release"])
+        self.assertGreater(len(view["recent"]), 1)
         state = self.installed(self.builds[3])
         view = feed.view(result, state, dev=False)
         self.assertEqual(view["installed"]["name"], "v0.5_2026-11-01_abc0001")
@@ -233,7 +236,11 @@ class FeedWebTests(FeedBase):
         self.assertIn("not a tested release", page)
         self.assertIn("/review/", self.post("/firmware/get", name="2026-11-08_dee0001").headers["Location"])
         self.post("/settings/developer", on="0")
-        self.assertNotIn("Recent builds", self.client.get("/firmware").get_data(as_text=True))
+        page = self.client.get("/firmware").get_data(as_text=True)
+        self.assertNotIn("Recent builds", page)
+        self.assertIn("<h3>Releases</h3>", page)                       # older releases without developer mode
+        self.assertIn("v0.5_2026-11-01_abc0001", page)
+        self.assertNotIn("2026-11-08_dee0001", page)
 
 
 class HomeTests(FeedBase):
