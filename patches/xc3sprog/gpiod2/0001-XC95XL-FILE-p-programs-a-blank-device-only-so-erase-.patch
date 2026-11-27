@@ -1,0 +1,111 @@
+From 8b6e900a63bf3f346d78015da710f1f9a5d224ea Mon Sep 17 00:00:00 2001
+From: Stephen Leary <stephen@terriblefire.com>
+Date: Fri, 27 Nov 2026 13:08:42 +0000
+Subject: [PATCH] XC95XL: FILE:p programs a blank device only, so erase,
+ program and verify can each be checked
+
+-e erases and blank-checks, FILE:p checks the device is blank and programs
+it (no erase, no verify), FILE:v verifies: three runs, each with its own
+exit status. blank_check() now checks the instruction capture first and
+leaves ISP cleanly on a failure, like erase() and array_program().
+---
+ progalgxc95x.cpp |  4 ++++
+ xc3sprog.cpp     | 37 ++++++++++++++++++++++++++++++++-----
+ 2 files changed, 36 insertions(+), 5 deletions(-)
+
+diff --git a/progalgxc95x.cpp b/progalgxc95x.cpp
+index f2d22fd..2c18c20 100644
+--- a/progalgxc95x.cpp
++++ b/progalgxc95x.cpp
+@@ -462,8 +462,12 @@ int ProgAlgXC95X::erase(bool override_protect)
+ int ProgAlgXC95X::blank_check()
+ {
+   int ret;
++  if (check_ir_capture())
++    return 1;
+   flow_enable();
+   ret = flow_blank_check();
++  if (ret)
++    flow_error_exit();
+   flow_disable();
+   return ret;
+ }
+diff --git a/xc3sprog.cpp b/xc3sprog.cpp
+index c67549a..45de031 100644
+--- a/xc3sprog.cpp
++++ b/xc3sprog.cpp
+@@ -340,8 +340,10 @@ void usage(bool all_options)
+   fprintf(stderr, "usage:\txc3sprog -c cable [options] <file0spec> <file1spec> ...\n");
+   fprintf(stderr, "\tList of known cables is given with -c follow by no or invalid cablename\n");
+   fprintf(stderr, "\tfilespec is filename:action:offset:style:length\n");
+-  fprintf(stderr, "\taction on of 'w|W|v|r|R'\n");
++  fprintf(stderr, "\taction on of 'w|W|p|v|r|R'\n");
+   fprintf(stderr, "\tw: erase whole area, write and verify\n");
++  fprintf(stderr, "\tp: XC95XL: program a blank device only (no erase, no verify):\n"
++                  "\t   run -e before it and FILE:v after it, each checked\n");
+   fprintf(stderr, "\tW: Write with auto-sector erase and verify\n");
+   fprintf(stderr, "\tv: Verify device against filename\n");
+   fprintf(stderr, "\tr: Read from device,write to file, don't overwrite existing file\n");
+@@ -1376,16 +1378,17 @@ int programXC95X(Jtag &jtag, unsigned long id, int argc, char **args,
+         if (colon && (strlen(colon + 1) != 1 || strchr(colon + 1, ':')))
+         {
+             fprintf(stderr, "%s: use FILE or FILE:ACTION, ACTION one of "
+-                    "w, v, r, R\n", args[0]);
++                    "w, p, v, r, R\n", args[0]);
+             return 1;
+         }
+         if (given == 'W')
+         {
+-            fprintf(stderr, "%s: W (no erase) is not supported, use w\n",
+-                    args[0]);
++            fprintf(stderr, "%s: W (no erase) is not supported, use w, or "
++                    "-e then FILE:p\n", args[0]);
+             return 1;
+         }
+-        if (tolower(given) != 'r' && tolower(given) != 'v' && tolower(given) != 'w')
++        if (tolower(given) != 'r' && tolower(given) != 'v' && tolower(given) != 'w'
++            && tolower(given) != 'p')
+         {
+             fprintf(stderr, "%s: unknown action '%c'\n", args[0], given);
+             return 1;
+@@ -1395,6 +1398,12 @@ int programXC95X(Jtag &jtag, unsigned long id, int argc, char **args,
+             fprintf(stderr, "-O only goes with an erase (-e or a write)\n");
+             return 1;
+         }
++        if (erase && tolower(given) == 'p')
++        {
++            fprintf(stderr, "-e and FILE:p are separate steps: run -e, then "
++                    "FILE:p (or use w)\n");
++            return 1;
++        }
+         if (erase && tolower(given) != 'w')
+         {
+             fprintf(stderr, "-e would erase the device before the %s\n",
+@@ -1472,6 +1481,24 @@ int programXC95X(Jtag &jtag, unsigned long id, int argc, char **args,
+         }
+         return 0;
+     }
++    if (action == 'p')
++    {
++        /* Program only: the device must be blank (erase it first with -e);
++           verify it afterwards with FILE:v. */
++        if (alg.blank_check())
++        {
++            fprintf(stderr, "Not programming: the device is not blank (erase it with -e first)\n");
++            return 1;
++        }
++        if (alg.array_program(jedecfile))
++        {
++            fprintf(stderr, "Programming failed\n");
++            return 1;
++        }
++        if (verbose)
++            fprintf(stderr, "Programmed (not verified: run FILE:v)\n");
++        return 0;
++    }
+     if (action == 'w')
+     {
+         if (alg.array_program(jedecfile))
+-- 
+2.50.1 (Apple Git-155)
+

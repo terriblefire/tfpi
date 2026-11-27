@@ -1,0 +1,30 @@
+From d1b86b67562c945f9ade56bb77a231d04ff526b9 Mon Sep 17 00:00:00 2001
+From: Stephen Leary <stephen@terriblefire.com>
+Date: Tue, 17 Nov 2026 20:52:11 +0000
+Subject: [PATCH 4/6] XC95XL: keep a Windows drive letter out of the action
+ check
+
+As getFile_and_Attribute_from_name does, skip a DOS drive prefix before
+looking for the FILE:ACTION separator.
+---
+ xc3sprog.cpp | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/xc3sprog.cpp b/xc3sprog.cpp
+index da706d4..1dbc79f 100644
+--- a/xc3sprog.cpp
++++ b/xc3sprog.cpp
+@@ -1360,6 +1360,10 @@ int programXC95X(Jtag &jtag, unsigned long id, int argc, char **args,
+            getFile_and_Attribute_from_name turns any longer action into w,
+            and opens (for a read, creates) the file. */
+         const char *colon = strchr(args[0], ':');
++#if defined(__WIN32__)
++        if (args[0][0] && args[0][1] == ':')   /* a DOS drive letter */
++            colon = strchr(args[0] + 2, ':');
++#endif
+         char given = colon ? colon[1] : 'w';
+         if (colon && (strlen(colon + 1) != 1 || strchr(colon + 1, ':')))
+         {
+-- 
+2.50.1 (Apple Git-155)
+

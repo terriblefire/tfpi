@@ -79,6 +79,10 @@ STUBS = {
         # Real banner: contains the word "failure" on every run.
         print("XC3SPROG (c) 2004-2011 xc3sprog project $Rev: 774 $ OS: Linux")
         print("Feedback on success/failure/enhancement requests:")
+        if "-h" in sys.argv:                                    # usage: FAKE_XC3_OLD = no FILE:p
+            if not os.environ.get("FAKE_XC3_OLD"):
+                print("\tp: XC95XL: program a blank device only (no erase, no verify):")
+            sys.exit(255)
         if "-j" in sys.argv:
             # Chain detect: FAKE_XC3_NOCHAIN = how many reads find no chain.
             open(os.environ["FAKE_CALLS"], "a").write("xc3sprog -j\n")
@@ -90,18 +94,40 @@ STUBS = {
             else:
                 print("JTAG loc.:   0  IDCODE: 0x59616093  Desc:                      XC95288XL Rev: F  IR length:  8")
             sys.exit(0)
-        # The chip: FAKE_CPLD holds the JEDEC file last programmed into it.
+        # The chip: FAKE_CPLD holds the JEDEC file last programmed into it (none = blank).
         chip = os.environ["FAKE_CPLD"]
         held = open(chip, "rb").read() if os.path.exists(chip) else None
+        calls = open(os.environ["FAKE_CALLS"], "a")
+        if "-e" in sys.argv:                                    # erase + blank check
+            calls.write("xc3sprog -e\n")
+            if os.environ.get("FAKE_XC3_PROG_NOCHAIN"):
+                print("No JTAG Chain found"); sys.exit(2)
+            print("JTAG chainpos: 0 Device IDCODE = 0x59616093\tDesc: XC95288XL")
+            if os.environ.get("FAKE_XC3_ERASE_FAIL"):
+                print("Erase failed (status 03)"); print("Erase failed"); sys.exit(1)
+            os.path.exists(chip) and os.unlink(chip)
+            print("Device is blank"); sys.exit(0)
         jed = sys.argv[-1]
         if jed.endswith(":v"):                                  # verify only, no erase
-            open(os.environ["FAKE_CALLS"], "a").write("xc3sprog :v\n")
+            calls.write("xc3sprog :v\n")
             print("JTAG chainpos: 0 Device IDCODE = 0x59616093\tDesc: XC95288XL")
-            if held != open(jed[:-2], "rb").read():
+            if held != open(jed[:-2], "rb").read() or (held and os.environ.get("FAKE_XC3_VERIFY_FAIL")):
                 print("Mismatch at fuse      0: 1 vs 0"); sys.exit(1)
             print("Success! Verify time 1799.3 ms"); sys.exit(0)
+        if jed.endswith(":p"):                                  # program a blank device only
+            calls.write("xc3sprog :p\n")
+            open(os.environ["FAKE_XC3_LOG"], "a").write(" ".join(sys.argv[1:]) + "\n")
+            print("JTAG chainpos: 0 Device IDCODE = 0x59616093\tDesc: XC95288XL")
+            if held is not None:
+                print("Device is not blank (status 03)")
+                print("Not programming: the device is not blank (erase it with -e first)"); sys.exit(1)
+            if os.environ.get("FAKE_XC3_FAIL"):
+                print("Programming failed at sector 5 (status 03)"); print("Programming failed"); sys.exit(1)
+            open(chip, "wb").write(open(jed[:-2], "rb").read())
+            print("Programmed (not verified: run FILE:v)"); sys.exit(0)
+        # One-run write (erase, program, verify): what an xc3sprog without FILE:p gets.
+        calls.write("xc3sprog\n")
         open(os.environ["FAKE_XC3_LOG"], "a").write(" ".join(sys.argv[1:]) + "\n")
-        open(os.environ["FAKE_CALLS"], "a").write("xc3sprog\n")
         if os.environ.get("FAKE_XC3_PROG_NOCHAIN"):
             print("No JTAG Chain found"); sys.exit(2)
         print("JTAG chainpos: 0 Device IDCODE = 0x59616093\tDesc: XC95288XL")
@@ -156,7 +182,8 @@ class Sandbox(unittest.TestCase):
         }
         self._saved = {key: os.environ.get(key) for key in
                        list(self.env) + ["FAKE_FOMU_CORRUPT", "FAKE_XC3_FAIL", "FAKE_CDONE_LOW", "FAKE_SPI_ID",
-                                        "FAKE_XC3_NOCHAIN", "FAKE_XC3_PROG_NOCHAIN"]}
+                                        "FAKE_XC3_NOCHAIN", "FAKE_XC3_PROG_NOCHAIN", "FAKE_XC3_ERASE_FAIL",
+                                        "FAKE_XC3_VERIFY_FAIL", "FAKE_XC3_OLD"]}
         os.environ.update(self.env)
         (self.tmp / "etc").mkdir()
         (self.tmp / "a314").write_text("active")

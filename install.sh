@@ -94,6 +94,16 @@ resolve() { # resolve REPO REF: the commit a branch REF is at now, else REF itse
 	commit=$(git ls-remote "$1" "refs/heads/$2" 2>/dev/null | cut -f1)
 	echo "${commit:-$2}"
 }
+build_jobs() { # parallel compile jobs: one per ~300 MB of RAM, at most one per core.
+	# A 512 MB Pi with a job per core runs out of memory and stops answering
+	# on the network until the build ends.
+	local mem_mb jobs
+	mem_mb=$(awk '/^MemTotal:/ {print int($2 / 1024)}' /proc/meminfo 2>/dev/null)
+	jobs=$(( ${mem_mb:-0} / 300 ))
+	[ "$jobs" -ge 1 ] || jobs=1
+	[ "$jobs" -le "$(nproc)" ] || jobs=$(nproc)
+	echo "$jobs"
+}
 needed() { # needed NAME REF BINARY: true if NAME must be (re)built
 	[ -n "${TFPI_REBUILD:-}" ] || [ ! -x "$3" ] || [ "$(prev "$1" ref)" != "$2" ] || return 1
 }
@@ -123,24 +133,46 @@ fetch() {
 # --- fomu-flash -------------------------------------------------------------
 if needed fomu-flash "$FOMU_FLASH_REF" /usr/local/bin/fomu-flash; then
 	fetch fomu-flash "$FOMU_FLASH_REPO" "$FOMU_FLASH_REF"
-	make -C "$SRC/fomu-flash" -j"$(nproc)"
+	make -C "$SRC/fomu-flash" -j"$(build_jobs)"
 	install -m755 "$SRC/fomu-flash/fomu-flash" /usr/local/bin/fomu-flash
 else
 	echo "fomu-flash: unchanged"
 fi
 
 # --- xc3sprog (gpiod_creator cable) ----------------------------------------
+# The pinned upstream commit plus our patches (patches/xc3sprog/<set>/, in
+# order). If the download, a patch or the build fails, the xc3sprog this Pi
+# already has stays in place and the install carries on: tfpi then flashes the
+# CPLD in one run, as it did before the separate checked steps.
 gpiod_major=$(pkg-config --modversion libgpiod | cut -d. -f1)
-if [ "$gpiod_major" -ge 2 ]; then xc3_ref=$XC3SPROG_REF; else xc3_ref=$XC3SPROG_REF_GPIOD1; fi
-# a branch (master) means its head now: rebuild when it has moved since the last install
-xc3_ref=$(resolve "$XC3SPROG_REPO" "$xc3_ref")
-echo "libgpiod $(pkg-config --modversion libgpiod): xc3sprog ${xc3_ref:0:7}"
-if needed xc3sprog "$xc3_ref" /usr/local/bin/xc3sprog; then
+if [ "$gpiod_major" -ge 2 ]; then xc3_ref=$XC3SPROG_REF; xc3_set=gpiod2; else xc3_ref=$XC3SPROG_REF_GPIOD1; xc3_set=gpiod1; fi
+xc3_ref=$(resolve "$XC3SPROG_REPO" "$xc3_ref")     # a commit stays a commit
+xc3_patchdir=$self_dir/patches/xc3sprog/$xc3_set
+xc3_patches=$(cat "$xc3_patchdir"/*.patch 2>/dev/null | sha256sum | cut -c1-12)
+xc3_record_ref=$(prev xc3sprog ref)
+xc3_record_patches=$(prev xc3sprog patches)
+echo "libgpiod $(pkg-config --modversion libgpiod): xc3sprog ${xc3_ref:0:7} + patches $xc3_set ($xc3_patches)"
+build_xc3sprog() {	# returns non-zero instead of stopping the install
+	local p
 	rm -rf "$SRC/xc3sprog/build"
-	fetch xc3sprog "$XC3SPROG_REPO" "$xc3_ref"
-	cmake -S "$SRC/xc3sprog" -B "$SRC/xc3sprog/build" -DUSE_FTD2XX=OFF -DCMAKE_BUILD_TYPE=Release
-	cmake --build "$SRC/xc3sprog/build" -j"$(nproc)"
-	cmake --install "$SRC/xc3sprog/build"
+	fetch xc3sprog "$XC3SPROG_REPO" "$xc3_ref" || return 1
+	[ "$(git -C "$SRC/xc3sprog" rev-parse HEAD 2>/dev/null)" = "$xc3_ref" ] || return 1
+	git -C "$SRC/xc3sprog" reset --quiet --hard "$xc3_ref" || return 1     # patches go onto a clean tree
+	for p in "$xc3_patchdir"/*.patch; do
+		[ -e "$p" ] || continue
+		git -C "$SRC/xc3sprog" apply "$p" || { echo "xc3sprog: ${p##*/} doesn't apply"; return 1; }
+	done
+	cmake -S "$SRC/xc3sprog" -B "$SRC/xc3sprog/build" -DUSE_FTD2XX=OFF -DCMAKE_BUILD_TYPE=Release || return 1
+	cmake --build "$SRC/xc3sprog/build" -j"$(build_jobs)" || return 1
+	cmake --install "$SRC/xc3sprog/build" || return 1
+}
+if needed xc3sprog "$xc3_ref" /usr/local/bin/xc3sprog || [ "$xc3_record_patches" != "$xc3_patches" ]; then
+	if build_xc3sprog; then
+		xc3_record_ref=$xc3_ref
+		xc3_record_patches=$xc3_patches
+	else
+		echo "WARNING: xc3sprog ${xc3_ref:0:7} with our patches could not be built; this Pi keeps the xc3sprog it has (tfpi flashes the CPLD in one run with it)"
+	fi
 else
 	echo "xc3sprog: unchanged"
 fi
@@ -167,14 +199,14 @@ tarball() {
 # warning: the rest of the install (flashing, a314) must still finish.
 build_vasm() {
 	tarball vasm "$VASM_URL" "$VASM_SHA256" || return 1
-	make -C "$SRC/vasm" CPU=m68k SYNTAX=mot -j"$(nproc)" || return 1
+	make -C "$SRC/vasm" CPU=m68k SYNTAX=mot -j"$(build_jobs)" || return 1
 	install -m755 "$SRC/vasm/vasmm68k_mot" /usr/local/bin/vasmm68k_mot
 	install -d /usr/local/share/tfpi && echo "$VASM_URL" > /usr/local/share/tfpi/vasm.url
 }
 build_vlink() {
 	tarball vlink "$VLINK_URL" "$VLINK_SHA256" || return 1
 	mkdir -p "$SRC/vlink/objects"
-	make -C "$SRC/vlink" -j"$(nproc)" || return 1
+	make -C "$SRC/vlink" -j"$(build_jobs)" || return 1
 	install -m755 "$SRC/vlink/vlink" /usr/local/bin/vlink
 	install -d /usr/local/share/tfpi && echo "$VLINK_URL" > /usr/local/share/tfpi/vlink.url
 }
@@ -276,7 +308,8 @@ tfpi_version=$(sed -n 's/^__version__ *= *"\([^"]*\)".*/\1/p' "$self_dir/tfpi/__
 	echo "{"
 	ver tfpi "$TFPI_REPO" ", \"version\": \"$tfpi_version\""; echo ","
 	ver fomu-flash "$FOMU_FLASH_REPO"; echo ","
-	ver xc3sprog "$XC3SPROG_REPO"; echo ","
+	printf '"xc3sprog": {"repo": "%s", "ref": "%s", "patches": "%s"}' \
+		"$XC3SPROG_REPO" "$xc3_record_ref" "$xc3_record_patches"; echo ","
 	ver a314 "$A314_REPO" ", \"a314d_sha256\": \"$a314d_sha\""; echo
 	echo "}"
 } > "$PREFIX/versions.json.new"

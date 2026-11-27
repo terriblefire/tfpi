@@ -1,0 +1,404 @@
+From 3cc195d03a8603c8e93555589fa1213f908e5125 Mon Sep 17 00:00:00 2001
+From: Stephen Leary <stephen@terriblefire.com>
+Date: Tue, 17 Nov 2026 20:24:55 +0000
+Subject: [PATCH 1/6] XC95XL: follow iMPACT's erase and program flow, stop on
+ failure
+
+- gpiod and parport cables: shift zeros on TDI when the caller gives no
+  TDI data, as IOBase::shiftTDO says. tdi_byte was uninitialised, so every
+  status read shifted an unknown bit into the erase/program register.
+- ISP enable is ISPEN (0xE8) with 0x05, as iMPACT sends, not ISPENC
+  (0xE9) with 0x15.
+- Bulk erase with 0x3FFFF and read its status with 0x3FFFD; blank check
+  with 0x00003, status 0x00001. Waits run at least iMPACT's TCK count and
+  at least a minimum time.
+- Program status is read as iMPACT does: a control 00 shift after the
+  sector's control 11 word.
+- Erase and program each enter and leave ISP mode.
+- Read and verify shift zeros in the data field.
+- A failed erase, blank check or sector stops with exit status 1 instead
+  of programming or verifying anyway.
+- Before touching the device, refuse a JEDEC file that does not parse,
+  has the wrong fuse count, a bad checksum, or names another device.
+---
+ iogpiodpi.cpp    |   2 +-
+ ioparport.cpp    |   2 +-
+ progalgxc95x.cpp | 126 +++++++++++++++++++++++++++++++++++------------
+ progalgxc95x.h   |  11 +++--
+ xc3sprog.cpp     |  50 +++++++++++++++++--
+ 5 files changed, 149 insertions(+), 42 deletions(-)
+
+diff --git a/iogpiodpi.cpp b/iogpiodpi.cpp
+index 7cbdea9..a76b42d 100644
+--- a/iogpiodpi.cpp
++++ b/iogpiodpi.cpp
+@@ -84,7 +84,7 @@ void IOGPIODPi::txrx_block(const unsigned char *tdi, unsigned char *tdo, int len
+   int i=0;
+   int j=0;
+   unsigned char tdo_byte=0;
+-  unsigned char tdi_byte;
++  unsigned char tdi_byte=0; /* no tdi: shift zeros (IOBase::shiftTDO) */
+   if (tdi)
+       tdi_byte = tdi[j];
+       
+diff --git a/ioparport.cpp b/ioparport.cpp
+index 4cb17c4..e684863 100644
+--- a/ioparport.cpp
++++ b/ioparport.cpp
+@@ -412,7 +412,7 @@ void IOParport::txrx_block(const unsigned char *tdi, unsigned char *tdo,
+   int i=0;
+   int j=0;
+   unsigned char tdo_byte=0;
+-  unsigned char tdi_byte;
++  unsigned char tdi_byte=0; /* no tdi: shift zeros (IOBase::shiftTDO) */
+   unsigned char data=def_byte;
+   if (tdi)
+       tdi_byte = tdi[j];
+diff --git a/progalgxc95x.cpp b/progalgxc95x.cpp
+index 2c2055a..cae86a3 100644
+--- a/progalgxc95x.cpp
++++ b/progalgxc95x.cpp
+@@ -21,6 +21,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ 
+ #include <stdio.h>
+ #include <sys/time.h>
++#include <string.h>
+ #include <unistd.h>
+ #include "progalgxc95x.h"
+ 
+@@ -29,7 +30,8 @@ const byte ProgAlgXC95X::ISC_DISABLE=0xf0;
+ const byte ProgAlgXC95X::ISC_ERASE=0xed;
+ const byte ProgAlgXC95X::ISC_PROGRAM=0xea;
+ const byte ProgAlgXC95X::ISC_READ=0xee;
+-const byte ProgAlgXC95X::ISC_ENABLE=0xe9;
++/* ISPEN, as Xilinx iMPACT uses. 0xe9 is ISPENC. */
++const byte ProgAlgXC95X::ISC_ENABLE=0xe8;
+ 
+ const byte ProgAlgXC95X::XSC_BLANK_CHECK=0xe5;
+ 
+@@ -56,12 +58,28 @@ ProgAlgXC95X::ProgAlgXC95X(Jtag &j, int s)
+    }
+ }
+ 
++/* Stay in Run-Test/Idle for at least tck clocks and at least usec
++   microseconds. iMPACT's SVF counts its waits in TCK at 1 MHz; a bit-banged
++   cable runs at an unknown rate, so meet both the count and the time. */
++void ProgAlgXC95X::wait_idle(int tck, unsigned int usec)
++{
++  struct timeval tv[2];
++  long done;
++
++  gettimeofday(tv, NULL);
++  jtag->cycleTCK(tck);
++  gettimeofday(tv+1, NULL);
++  done = deltaT(tv, tv + 1);
++  if (done < (long)usec)
++    jtag->Usleep(usec - done);
++}
++
+ void ProgAlgXC95X::flow_enable()
+ {
+   byte data[1];
+ 
+   jtag->shiftIR(&ISC_ENABLE);
+-  data[0]=0x15;
++  data[0]=0x05;
+   jtag->shiftDR(data,0,6);
+   jtag->cycleTCK(1);
+ }
+@@ -69,7 +87,7 @@ void ProgAlgXC95X::flow_enable()
+ void ProgAlgXC95X::flow_disable()
+ {
+   jtag->shiftIR(&ISC_DISABLE);
+-  jtag->Usleep(100);
++  wait_idle(100, 100);
+   jtag->shiftIR(&BYPASS);
+   jtag->cycleTCK(1);
+ }
+@@ -81,34 +99,46 @@ void ProgAlgXC95X::flow_error_exit()
+   jtag->cycleTCK(1);
+ }
+ 
++/* The status shifts below send the operation's word again with control
++   bits 01, as iMPACT does, and the captured low two bits read 01 when the
++   operation finished. Words are 18 bits, least significant byte first. */
++
++/* Returns 0 when the device is blank. */
+ int ProgAlgXC95X::flow_blank_check()
+ {
+-  byte i_data[3]={0x3,0,0};
++  byte i_data[3]={0x03,0,0};  /* 0x00003 */
++  byte s_data[3]={0x01,0,0};  /* 0x00001 */
+   byte o_data[3];
+   jtag->shiftIR(&XSC_BLANK_CHECK);
+   jtag->shiftDR(i_data, 0,18);
+-  jtag->cycleTCK(500);
+-  jtag->shiftDR(0,o_data,18);
+-  if(jtag->getVerbose())
++  wait_idle(500, 500);
++  jtag->shiftDR(s_data,o_data,18);
++  if ((o_data[0] & 0x03) != 0x01)
+     {
+-      if ((o_data[0] & 0x03) == 0x01)
+-	fprintf(stderr, "Device is blank\n");
+-      else
+-	fprintf(stderr, "Device is not blank\n");
++      fprintf(stderr, "Device is not blank (status %02x)\n", o_data[0] & 0x03);
++      return 1;
+     }
+-  return ((o_data[0] & 0x03) == 0x01);
+-  
++  if(jtag->getVerbose())
++    fprintf(stderr, "Device is blank\n");
++  return 0;
+ }
+ 
+-void ProgAlgXC95X::flow_erase()
++/* Bulk erase. Returns 0 when the status says the erase finished. */
++int ProgAlgXC95X::flow_erase()
+ {
+-  byte data[3] = {0x03, 0, 0};
++  byte i_data[3] = {0xff, 0xff, 0x03};  /* 0x3ffff: every address bit set */
++  byte s_data[3] = {0xfd, 0xff, 0x03};  /* 0x3fffd */
++  byte o_data[3];
+   jtag->shiftIR(&ISC_ERASE);
+-  jtag->shiftDR(data,0,18);
+-  jtag->Usleep(500000);
+-  jtag->shiftDR(0,data,18);
+-  if((data[0]& 0x03) != 0x01)
+-    fprintf(stderr, "Erase still running %02x\n", data[0]);
++  jtag->shiftDR(i_data,0,18);
++  wait_idle(200000, 500000);
++  jtag->shiftDR(s_data,o_data,18);
++  if((o_data[0]& 0x03) != 0x01)
++    {
++      fprintf(stderr, "Erase failed (status %02x)\n", o_data[0] & 0x03);
++      return 1;
++    }
++  return 0;
+ }
+   
+ #define MaxSector 108
+@@ -161,20 +191,17 @@ int ProgAlgXC95X::flow_array_program(JedecFile &file)
+ 	  jtag->shiftIR(&ISC_PROGRAM);
+ 	  jtag->shiftDR(preamble,0,2,0,false);
+ 	  jtag->shiftDR(i_data,0,(DRegLength+2)*8);
+-	  if((l == 2) && (m == 4))
+-	    jtag->Usleep(50000);
+-	  else
+-	    jtag->cycleTCK(1);
+ 	  if ((l == 2) && (m == 4))
+ 	    {
++	      /* Control bits 11 programmed the sector. Read its status as
++		 iMPACT does: shift the word again with control bits 00; the
++		 two bits captured first read 01 when programming finished. */
++	      wait_idle(20000, 50000);
+ 	      preamble[0]= 0x00;
+ 	      for(k=0; k< 32; k++)
+ 		{
+-		  jtag->shiftIR(&ISC_PROGRAM);
+-		  jtag->shiftDR(preamble, 0,2,0,false);
++		  jtag->shiftDR(preamble, o_data, 2, 0, false);
+ 		  jtag->shiftDR(i_data, 0,(DRegLength+2)*8);
+-		  jtag->Usleep(50000);
+-		  jtag->shiftDR(0,o_data, ((DRegLength+2)*8)+2);
+ 		  if(jtag->getVerbose())
+ 		    {
+ 		      fprintf(stderr, ".");
+@@ -182,13 +209,17 @@ int ProgAlgXC95X::flow_array_program(JedecFile &file)
+ 		    }
+ 		  if ((o_data[0] & 0x03) == 0x01)
+ 		    break;
++		  wait_idle(20000, 50000);
+ 		}
+ 	      if (k == 32)
+ 		{
+-		  fprintf(stderr, "failed\n");
++		  fprintf(stderr, "\nProgramming failed at sector %d (status %02x)\n",
++			  sec, o_data[0] & 0x03);
+ 		  return 1;
+ 		}
+ 	    }
++	  else
++	    jtag->cycleTCK(1);
+ 	}
+       }
+     }
+@@ -212,6 +243,7 @@ void ProgAlgXC95X::flow_array_read(JedecFile &rbfile)
+   unsigned char data;
+   unsigned int idx=0;
+ 
++  memset(i_data, 0, sizeof(i_data)); /* only the address is set below */
+   gettimeofday(tv, NULL);
+   for(sec=0;sec < MaxSector;sec++)
+     {
+@@ -282,6 +314,7 @@ int ProgAlgXC95X::flow_array_verify(JedecFile &file)
+   unsigned char data;
+   unsigned int idx=0;
+ 
++  memset(i_data, 0, sizeof(i_data)); /* only the address is set below */
+   gettimeofday(tv, NULL);
+   for(sec=0;sec < MaxSector;sec++)
+     {
+@@ -360,9 +393,40 @@ void ProgAlgXC95X::array_read(JedecFile &file)
+   flow_disable();
+ }
+ 
+-void ProgAlgXC95X::array_program(JedecFile &file)
++/* Returns 0 when the device erased and is blank. */
++int ProgAlgXC95X::erase()
++{
++  int ret;
++  flow_enable();
++  ret = flow_erase();
++  if (ret == 0)
++    ret = flow_blank_check();
++  if (ret)
++    flow_error_exit();
++  flow_disable();
++  return ret;
++}
++
++/* Returns 0 when the device is blank. */
++int ProgAlgXC95X::blank_check()
+ {
+-  flow_array_program(file);
++  int ret;
++  flow_enable();
++  ret = flow_blank_check();
++  flow_disable();
++  return ret;
++}
++
++/* Returns 0 when every sector programmed. */
++int ProgAlgXC95X::array_program(JedecFile &file)
++{
++  int ret;
++  flow_enable();
++  ret = flow_array_program(file);
++  if (ret)
++    flow_error_exit();
++  flow_disable();
++  return ret;
+ }
+ 
+ int ProgAlgXC95X::array_verify(JedecFile &file)
+diff --git a/progalgxc95x.h b/progalgxc95x.h
+index e03d763..b00e517 100644
+--- a/progalgxc95x.h
++++ b/progalgxc95x.h
+@@ -44,6 +44,7 @@ class ProgAlgXC95X
+ 
+   Jtag *jtag;
+   int DRegLength;
++  void wait_idle(int tck, unsigned int usec);
+   void flow_enable();
+   void flow_disable();
+   void flow_error_exit();
+@@ -51,14 +52,16 @@ class ProgAlgXC95X
+   int flow_array_program(JedecFile &file);
+   int flow_array_verify(JedecFile &file);
+   int flow_blank_check();
+-  void flow_erase();
++  int flow_erase();
+  public:
+   ProgAlgXC95X(Jtag &j, int s);
+-  int blank_check(){flow_enable(); int ret= flow_blank_check(); flow_disable(); return ret;};
+-  int erase(){flow_enable(); flow_erase(); return flow_blank_check();};
++  unsigned int fuseCount(){return 108*108*DRegLength;};
++  /* These return 0 on success. */
++  int blank_check();
++  int erase();
+   int array_verify(JedecFile &file);
+   void array_read(JedecFile &file);
+-  void array_program(JedecFile &file);
++  int array_program(JedecFile &file);
+ };
+ 
+ 
+diff --git a/xc3sprog.cpp b/xc3sprog.cpp
+index 53accdf..a4bb639 100644
+--- a/xc3sprog.cpp
++++ b/xc3sprog.cpp
+@@ -27,6 +27,7 @@ Dmitry Teytelman [dimtey@gmail.com] 14 Jun 2006 [applied 13 Aug 2006]:
+ 
+ #include <stdlib.h>
+ #include <string.h>
++#include <strings.h>
+ #include <unistd.h>
+ #include <list>
+ #include <memory>
+@@ -1346,9 +1347,13 @@ int programXC95X(Jtag &jtag, unsigned long id, int argc, char **args,
+     
+     if (erase)
+     {
+-        alg.erase();
++        if (alg.erase())
++        {
++            fprintf(stderr, "Erase failed\n");
++            return 1;
++        }
+     }
+-    
++
+     for (i = 0; i< argc; i++)
+     {
+         int ret = 0;
+@@ -1393,16 +1398,51 @@ int programXC95X(Jtag &jtag, unsigned long id, int argc, char **args,
+         }
+         else if (action == 'v' || tolower(action) == 'w') 
+         {
+-            jedecfile.readFile(jedecfile_fp);
++            /* Check the file before anything touches the device */
++            if (jedecfile.readFile(jedecfile_fp))
++            {
++                fprintf(stderr, "%s: not a valid JEDEC file\n", args[i]);
++                return 1;
++            }
++            if (jedecfile.getLength() != alg.fuseCount())
++            {
++                fprintf(stderr, "%s: %u fuses, the %s has %u\n", args[i],
++                        jedecfile.getLength(), device, alg.fuseCount());
++                return 1;
++            }
++            if (jedecfile.getChecksum() != jedecfile.calcChecksum())
++            {
++                fprintf(stderr, "%s: checksum %04x, the fuses sum to %04x\n",
++                        args[i], jedecfile.getChecksum(),
++                        jedecfile.calcChecksum());
++                return 1;
++            }
++            if (jedecfile.getDevice()[0] &&
++                strncasecmp(jedecfile.getDevice(), device, strlen(device)) != 0)
++            {
++                fprintf(stderr, "%s is for a %s, the device is a %s\n",
++                        args[i], jedecfile.getDevice(), device);
++                return 1;
++            }
+             if (action == 'w')
+             {
+                 if (!erase)
+                 {
+-                    ret = alg.erase();
++                    if (alg.erase())
++                    {
++                        fprintf(stderr, "Erase failed: not programming\n");
++                        return 1;
++                    }
+                 }
+ 	    }
+ 	    if(tolower(action) == 'w')
+-                alg.array_program(jedecfile);
++            {
++                if (alg.array_program(jedecfile))
++                {
++                    fprintf(stderr, "Programming failed\n");
++                    return 1;
++                }
++            }
+             ret = alg.array_verify(jedecfile);
+         }
+         if(ret)
+-- 
+2.50.1 (Apple Git-155)
+
