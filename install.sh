@@ -94,6 +94,16 @@ resolve() { # resolve REPO REF: the commit a branch REF is at now, else REF itse
 	commit=$(git ls-remote "$1" "refs/heads/$2" 2>/dev/null | cut -f1)
 	echo "${commit:-$2}"
 }
+build_jobs() { # parallel compile jobs: one per ~300 MB of RAM, at most one per core.
+	# A 512 MB Pi with a job per core runs out of memory and stops answering
+	# on the network until the build ends.
+	local mem_mb jobs
+	mem_mb=$(awk '/^MemTotal:/ {print int($2 / 1024)}' /proc/meminfo 2>/dev/null)
+	jobs=$(( ${mem_mb:-0} / 300 ))
+	[ "$jobs" -ge 1 ] || jobs=1
+	[ "$jobs" -le "$(nproc)" ] || jobs=$(nproc)
+	echo "$jobs"
+}
 needed() { # needed NAME REF BINARY: true if NAME must be (re)built
 	[ -n "${TFPI_REBUILD:-}" ] || [ ! -x "$3" ] || [ "$(prev "$1" ref)" != "$2" ] || return 1
 }
@@ -123,7 +133,7 @@ fetch() {
 # --- fomu-flash -------------------------------------------------------------
 if needed fomu-flash "$FOMU_FLASH_REF" /usr/local/bin/fomu-flash; then
 	fetch fomu-flash "$FOMU_FLASH_REPO" "$FOMU_FLASH_REF"
-	make -C "$SRC/fomu-flash" -j"$(nproc)"
+	make -C "$SRC/fomu-flash" -j"$(build_jobs)"
 	install -m755 "$SRC/fomu-flash/fomu-flash" /usr/local/bin/fomu-flash
 else
 	echo "fomu-flash: unchanged"
@@ -153,7 +163,7 @@ build_xc3sprog() {	# returns non-zero instead of stopping the install
 		git -C "$SRC/xc3sprog" apply "$p" || { echo "xc3sprog: ${p##*/} doesn't apply"; return 1; }
 	done
 	cmake -S "$SRC/xc3sprog" -B "$SRC/xc3sprog/build" -DUSE_FTD2XX=OFF -DCMAKE_BUILD_TYPE=Release || return 1
-	cmake --build "$SRC/xc3sprog/build" -j"$(nproc)" || return 1
+	cmake --build "$SRC/xc3sprog/build" -j"$(build_jobs)" || return 1
 	cmake --install "$SRC/xc3sprog/build" || return 1
 }
 if needed xc3sprog "$xc3_ref" /usr/local/bin/xc3sprog || [ "$xc3_record_patches" != "$xc3_patches" ]; then
@@ -189,14 +199,14 @@ tarball() {
 # warning: the rest of the install (flashing, a314) must still finish.
 build_vasm() {
 	tarball vasm "$VASM_URL" "$VASM_SHA256" || return 1
-	make -C "$SRC/vasm" CPU=m68k SYNTAX=mot -j"$(nproc)" || return 1
+	make -C "$SRC/vasm" CPU=m68k SYNTAX=mot -j"$(build_jobs)" || return 1
 	install -m755 "$SRC/vasm/vasmm68k_mot" /usr/local/bin/vasmm68k_mot
 	install -d /usr/local/share/tfpi && echo "$VASM_URL" > /usr/local/share/tfpi/vasm.url
 }
 build_vlink() {
 	tarball vlink "$VLINK_URL" "$VLINK_SHA256" || return 1
 	mkdir -p "$SRC/vlink/objects"
-	make -C "$SRC/vlink" -j"$(nproc)" || return 1
+	make -C "$SRC/vlink" -j"$(build_jobs)" || return 1
 	install -m755 "$SRC/vlink/vlink" /usr/local/bin/vlink
 	install -d /usr/local/share/tfpi && echo "$VLINK_URL" > /usr/local/share/tfpi/vlink.url
 }
