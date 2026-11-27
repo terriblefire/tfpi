@@ -1,0 +1,24 @@
+{% extends "base.html" %}{% block body %}
+<div class="card"><h1>Rebooting the Pi</h1>
+<p id="status" class="muted">The Pi is rebooting. This page goes to the Home page when the Pi is back.</p>
+<p class="muted">Until then the Amiga has no PI0:, no a314 disks and no other a314 services.</p>
+</div>
+<script>
+const before = {{ boot | tojson }}, started = Date.now(), statusEl = document.getElementById("status");
+let wentDown = false;
+async function poll() {
+  try {
+    const r = await fetch("/pi/status", {cache: "no-store"});
+    if (r.redirected) { location.href = "/"; return; }          // logged out: the Home page asks
+    const d = await r.json();
+    if ((d.boot_id && d.boot_id !== before) || (wentDown && !d.boot_id)) { location.href = "/"; return; }
+    if (d.error) { statusEl.className = "bad"; statusEl.textContent = "The Pi didn't reboot: " + d.error; return; }
+  } catch (e) {
+    wentDown = true;
+    statusEl.textContent = "The Pi is rebooting (" + Math.round((Date.now() - started) / 1000) + " s)…";
+  }
+  setTimeout(poll, 2000);
+}
+setTimeout(poll, 3000);
+</script>
+{% endblock %}

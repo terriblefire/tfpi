@@ -246,6 +246,15 @@ and also warns if the a314d on the Pi isn't the one the installer built. No
 flash can start while an update runs. `sudo TFPI_REBUILD=1 tfpi-update`
 rebuilds everything.
 
+The Pi needs a reboot only when its boot files change (config.txt,
+cmdline.txt or the a314 SPI overlay), or when a314d doesn't start after a314
+is rebuilt. The installer and the update compare the boot files before and
+after. When a reboot is needed, every page says why, with a **Reboot the Pi**
+button, until the Pi has rebooted; otherwise the update log ends with "no
+reboot needed". The Home page always has **Reboot the Pi**; it refuses while a
+flash, update, diagnostic test or image conversion runs. Until the Pi is back
+the Amiga has no PI0:, a314 disks or other a314 services.
+
 ## Command line
 
 ```

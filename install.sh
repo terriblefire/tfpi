@@ -192,13 +192,24 @@ vlink -v 2>&1 | head -1 || true
 # This is the only step that interrupts a314d.
 a314_built=0
 a314d_sha=$(prev a314 a314d_sha256)
+# The boot files install-pi.sh may change; only a change to one needs a Pi reboot.
+boot_dir=/boot/firmware
+[ -d "$boot_dir" ] || boot_dir=/boot
+boot_files=("$boot_dir/config.txt" "$boot_dir/cmdline.txt" "$boot_dir/overlays/spi-a314.dtbo")
+boot_hash() { [ -f "$1" ] && sha256sum < "$1" | cut -c1-64 || true; }     # "" if missing
+boot_before=()
+boot_changed=""
 # A314_REF is a branch (tf4060): rebuild when its head has moved since the last install
 A314_COMMIT=$(resolve "$A314_REPO" "$A314_REF")
 if needed a314 "$A314_COMMIT" /opt/a314/a314d; then
 	fetch a314 "$A314_REPO" "$A314_COMMIT" "$A314_USER"
 	echo "a314: stopping a314d to rebuild it"
 	systemctl stop a314d 2>/dev/null || true
+	for f in "${boot_files[@]}"; do boot_before+=("$(boot_hash "$f")"); done
 	(cd "$SRC/a314/Software" && SUDO_USER=$A314_USER bash ./install-pi.sh tf)
+	for i in "${!boot_files[@]}"; do
+		[ "$(boot_hash "${boot_files[$i]}")" = "${boot_before[$i]}" ] || boot_changed="$boot_changed ${boot_files[$i]##*/}"
+	done
 	a314_built=1
 	a314d_sha=$(sha256sum /opt/a314/a314d | cut -d" " -f1)
 else
@@ -337,7 +348,21 @@ if [ "$first_install" = 1 ] && [ -z "${TFPI_NO_REBOOT:-}" ]; then
 	echo "Rebooting to load the a314 SPI overlay..."
 	systemctl reboot
 elif [ "$a314_built" = 1 ]; then
-	# install-pi.sh leaves a314d stopped and expects a reboot.
-	systemctl start a314d || echo "a314d did not start; reboot to load the SPI overlay"
-	echo "Reboot if config.txt changed (a314 SPI overlay): sudo reboot"
+	# install-pi.sh leaves a314d stopped and says to reboot; tfpi starts a314d
+	# itself, so a reboot is needed only if a boot file changed or a314d fails.
+	reboot_why=""
+	if [ -n "$boot_changed" ]; then
+		reboot_why="the a314 install changed $(printf '%s' "${boot_changed# }" | sed 's/ / and /g')"
+	fi
+	if ! systemctl start a314d; then
+		reboot_why="${reboot_why:-a314d did not start after the a314 install}"
+	fi
+	if [ -n "$reboot_why" ]; then
+		# The web page shows this until the next boot (the record's boot_id).
+		printf '{"boot_id": "%s", "time": %s, "why": "%s"}\n' \
+			"$(cat /proc/sys/kernel/random/boot_id)" "$(date +%s)" "$reboot_why" > /var/lib/tfpi/reboot.json
+		echo "REBOOT NEEDED: $reboot_why. Use Reboot the Pi on the TF Pi Home page, or sudo reboot."
+	else
+		echo "a314: a314d started again and no boot file changed, so the Pi needs no reboot"
+	fi
 fi
